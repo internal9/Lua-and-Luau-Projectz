@@ -257,10 +257,6 @@ local function ParseTokens(expr_tokens)
 				warn(tokens)
 			end
 		end
-		
-		if lowest_operator == nil then
-			return tokens
-		end
 
 		local tokens_part_1, tokens_part_2 = SplitTokensFromIndex(tokens, lowest_operator_index)
 

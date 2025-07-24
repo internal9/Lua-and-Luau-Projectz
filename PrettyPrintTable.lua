@@ -1,37 +1,38 @@
 function tableToPrettyString(tb)
-  local convertToStr, getValueStr, getIndexStr
-  
-  local function indentMultiLineString(str, nestedCount)
-    local indentedStr = str:gsub("[^\n]+", function(part)
-      -- is part the start of the string? if not, then that means a newline char precedes it
-      if str:find(part) ~= 1 then
-        return string.rep(" ", nestedCount).. part
-      end
-    end)
-    return indentedStr
+    local convertToStr, getValueStr, getIndexStr
+    
+    local function indentMultiLineString(str, nestedCount)
+      local indentedStr = str:gsub("[^\n]+", function(part)
+        -- is part the start of the string? if not, then that means a newline char precedes it
+        if str:find(part) ~= 1 then
+          return string.rep(" ", nestedCount).. part
+        end
+      end)
+      return indentedStr
   end
   
   function getIndexStr(index)
-        local indexStr = tostring(index)
-        return type(index) ~= "string" and string.format("[%s]", indexStr) or indexStr
+      local indexStr = tostring(index)
+      return type(index) ~= "string" and string.format("[%s]", indexStr) or indexStr
   end
+  
   function getValueStr(value, nestedCount)
-    local valueType = type(value)
-    if valueType == "table" then
-      return convertToStr(value, nestedCount + 1)
-    end
-    if valueType == "number" then
-      return tostring(value)
-    end
-    if valueType == "string" and value:find("\n") then
-      return indentMultiLineString(value, nestedCount + 1)
-    end
+      local valueType = type(value)
+      if valueType == "table" then
+        return convertToStr(value, nestedCount + 1)
+      end
+      if valueType == "number" then
+        return tostring(value)
+      end
+      if valueType == "string" and value:find("\n") then
+        return indentMultiLineString(value, nestedCount + 1)
+      end
     
-    return string.format("\"%s\"", tostring(value))
+      return string.format("\"%s\"", tostring(value))
   end
   
 
-    function convertToStr(tb, nestedCount)
+  function convertToStr(tb, nestedCount)
         -- nestedCount offset of 1,because value inside tables are always indented (sorry i bad at explaining)
         local indentStr = string.rep(" ", nestedCount + 1)
         local str = "{\n"

@@ -2,6 +2,7 @@
   gotta implement parsing, floating points
 ]=]
 
+-- FIXME: rename module 'prettytable' for consistency
 local pretty_table = require("prettytable")
 
 local fmt = string.format

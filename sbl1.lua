@@ -2,17 +2,19 @@
   priority:
   	implement better debugging
   	finish if statements
+  	replace lexing same tokens with constant preset tokens
   	
   expressions list:
   	number
   	boolean (aka logical)
 ]=]
 
-local pretty_table = require("prettytable")
+local pretty_table = require("pretty_table")
 
 local fmt = string.format
-local function pretty_tb_print(tb) print(pretty_table(tb)) end
+local function print_pretty_tb(tb) print(pretty_table(tb)) end
 
+-- slightly more detailed for use of debugging messages
 local TK_TYPES = {
 	KEYWORD = "keyword",
 	ID = "identifier",
@@ -29,30 +31,30 @@ local TK_TYPES = {
 local PARSE_TYPES = {
 	FN = "fn",
 	FN_CALL = "fn_call",
-	STRCT_INDEX = "struct_index",
-	
-}
-
--- parse tree node types
-local ND_TYPES = {
-	NUM = "number",
-	NUM_BIN = "number_binary",
-	NUM_UNA = "number_unary",
-	BOOL_BIN = "bool_binary",
-	BOOL_UNA = "bool_unary"
+	STRUCT_INDEX = "struct_index",
+	IF = "if",
+	ELIF = "elif",
+	DECLARE = "declare",
+	BLOCK = "block",
+	LITERAL = "literal",
+	ID_REFER = "id_refer",
+	NUM_BIN_EXPR = "number_binary_expr",
+	NUM_UNA_EXPR = "number_unary_expr",
+	BOOL_BIN_EXPR = "bool_binary_expr",
+	BOOL_UNA_EXPR = "bool_unary_expr"
 }
 
 -- implement associativaty, to account for right associative operator '^'
 local OP_PRECS = {
 	["||"] = 1, ["&&"] = 1,
 	["=="] = 2,
-	['+'] = 4, ['-'] = 4,
-	['*'] = 5, ['/'] = 5,
+	['+'] = 3, ['-'] = 3,
+	['*'] = 4, ['/'] = 4,
 }
 
 -- will change if '^' is added
 local NUM_UNA_PREC = 6
-local BIN_UNA_PREC = 3
+local BIN_UNA_PREC = 6
 		
 local src_text;
 
@@ -78,7 +80,7 @@ end
 local function expect_tk_of_type(type)
 	local tk = next_tk()
 	
-	assert(tk, fmt("Expected %s token", type_debug, value))
+	assert(tk, fmt("Expected %s token", type))
 	assert(tk.type == type, fmt("Invalid %s token '%s', expected %s token", tk.type, tk.value, type))
 	return tk
 end
@@ -111,10 +113,10 @@ end
 -- pratt parsing
 local function null_denot(tk, is_bool_expr)
 	if (tk.type == TK_TYPES.NUM) then
-		return tk
+		return {type = PARSE_TYPES.LITERAL, value = tk.value}
 		
 	elseif (tk.value == '-') then	
-		return {type = ND_TYPES.NUM_UNA, op = tk.value, right = parse_expr(NUM_UNA_PREC)}
+		return {type = PARSE_TYPES.NUM_UNA_EXPR, op = tk.value, right = parse_expr(NUM_UNA_PREC)}
 		
 	elseif (tk.value == '(') then
 		local expr = parse_expr(0, is_bool_expr)
@@ -124,18 +126,15 @@ local function null_denot(tk, is_bool_expr)
 	elseif (tk.type == TK_TYPES.ID) then
 		return parse_id(tk)
 
-	elseif (is_bool_expr) then
-		if (tk.value == '!') then
-			return {type = ND_TYPES.BOOL_UNA, op = '!', right = parse_expr(BIN_UNA_PREC, true)}
+	elseif (tk.value == '!') then
+		return {type = PARSE_TYPES.BOOL_UNA_EXPR, op = '!', right = parse_expr(BIN_UNA_PREC, true)}
 			
-		elseif (tk.type == TK_TYPES.KEYWORD or tk.type == TK_TYPES.STR) then
-			return tk
-		end
-		
-		error(fmt("Invalid %s token '%s'. Expected number, boolean, identifier, '-', or '(' token for parsing boolean expression", tk.type, tk.value))		
-	end
+	elseif (tk.value == "true" or tk.value == "false" or tk.value == "null" or tk.type == TK_TYPES.STR) then
+		return {type = PARSE_TYPES.LITERAL, value = tk.value}
+
+	end		
 	
-	error(fmt("Invalid %s token '%s'. Expected number, identifier, '-', or '(' token for parsing number expression", tk.type, tk.value))
+	error(fmt("Invalid %s token '%s'. Expected number, identifier, '-', or '(' token for parsing expression", tk.type, tk.value))
 end
 
 -- would probably be helpful to note that it checks if next tk even exists at all
@@ -146,41 +145,24 @@ local function is_next_prec_higher(prec_limit)
 	return (tk.type == TK_TYPES.NUM_OP or tk.type == TK_TYPES.BOOL_OP) and (OP_PRECS[tk.value] > prec_limit) or false
 end
 
--- number expressions CANNOT contain boolean expressions
-local VALID_BOOL_EXPR_NDS = {
-	ND_TYPES.BOOL_BIN,
-	ND_TYPES.BOOL_UNA,
-	ND_TYPES.NUM_BIN,
-	ND_TYPES.NUM_UNA,
-	TK_TYPES.ID,
-	TK_TYPES.NUM,
-	TK_TYPES.BOOL
-}
-
--- boolean expressions may contain nested number expressions, but NOT vice versa
-function parse_expr(prec_limit, is_bool_expr)
+function parse_expr(prec_limit)
 	prec_limit = prec_limit or 0
-	-- is_bool_expr = (is_bool_expr ~= nil) and is_bool_expr or false
+	is_bool_expr = (is_bool_expr ~= nil) and is_bool_expr or false
 	local left_tk = next_tk()
-	
-	assert(left_tk, "Expected number, identifier, '-', or '(' token for parsing number expression at..")
+
+	assert(left_tk, "Expected number, identifier, '-', or '(' token for parsing expression at..")
 	local left = null_denot(left_tk, is_bool_expr)	
 
 	-- temp solution for condition.. maybe not?
 	while (is_next_prec_higher(prec_limit)) do
 		local op_tk = next_tk()
 		local prec = OP_PRECS[op_tk.value]
-		local right =  parse_expr(prec, is_bool_expr)
+		local right =  parse_expr(prec)
 		
-		if (is_bool_expr) then			
-			if (op_tk.type == TK_TYPES.BOOL_OP) then
-				left = {type = ND_TYPES.BOOL_BIN, left = left, op = op_tk.value, right = right}
-			else
-				left = {type = ND_TYPES.NUM_BIN, left = left, op = op_tk.value, right = right}
-			end
-			
-		else			  
-			left = {type = ND_TYPES.NUM_BIN, left = left, op = op_tk.value, right = right}		
+		if (op_tk.type == TK_TYPES.BOOL_OP) then
+			left = {type = PARSE_TYPES.BOOL_BIN_EXPR, left = left, op = op_tk.value, right = right}
+		else
+			left = {type = PARSE_TYPES.NUM_BIN_EXPR, left = left, op = op_tk.value, right = right}
 		end
 	end
 
@@ -191,12 +173,63 @@ function parse_fn_call(id_tk)
 	
 end
 
-local function parse_if()
-	expect_tk_of_value(TK_TYPES.MISC, '(')
+local function parse_if_clause()
+	expect_tk_of_value(TK_TYPES.MISC, '(')	
 	local cond = parse_expr(0, true)
-	pretty_tb_print(cond)
-
 	expect_tk_of_value(TK_TYPES.MISC, ')')
+
+	local block = parse_block()
+	return {type = PARSE_TYPES.ELIF, cond = cond, block = block}	
+end
+
+local function parse_if()
+	expect_tk_of_value(TK_TYPES.MISC, '(')	
+	local cond = parse_expr(0, true)
+	expect_tk_of_value(TK_TYPES.MISC, ')')
+	
+	local block = {}
+	local elif_statements = {}
+	local else_block = nil
+
+	print_pretty_tb(cond)
+
+	while (true) do
+		if (tk_index == #tokens + 1) then
+			-- forgot to close if statement block
+		end
+		
+		local statement = parse_statement()
+		
+		if (not statement) then
+			local tk = next_tk()
+			assert(tk, "Expected keyword token 'end' or statements")
+
+			if (tk.value == "elif") then
+				table.insert(elif_statements, parse_if_clause())
+				
+			elseif (tk.value == "else") then
+				else_block = parse_block()
+
+				-- temporary debug lol
+				-- print("else: ", pretty_table(else_block))
+				-- print("SDSSDSDSD", tokens[tk_index], tk_index, #tokens)
+				expect_tk_of_value(TK_TYPES.KEYWORD, "end")
+
+				break
+				
+			elseif (tk.value == "end") then
+				break
+				
+			else
+				error(fmt("Invalid %s token '%s', starting at index %d. Expected an identifier, 'var', 'fn', 'if' token, or 'end'  token to close block",
+			  	  tk.type, tk.value, tk.src_start_index))
+			end
+		end
+
+		table.insert(block, statement)
+	end
+
+	return {type = PARSE_TYPES.IF, cond = cond, block = block, elif_statements = elif_statements, else_block = else_block}
 end
 
 -- TODO: add function call
@@ -204,7 +237,7 @@ end
 -- return id_ref instead of 'id_tk' itself?
 function parse_id(id_tk)
 	local tk = peek_tk()
-	if (not tk) then return id_tk end
+	if (not tk) then return {type = PARSE_TYPES.ID_REFER, id_name = id_tk.value} end
 
 	if (tk.value == '.') then
 
@@ -216,7 +249,7 @@ function parse_id(id_tk)
 		  fmt("Invalid %s token '%s'. Expected identifier token for indexing struct %s", index_tk.type, index_tk.value, id_tk.value))
 
 		tk_index = tk_index + 2	  
-		return {type = "struct_index", id_name = id_tk.value, index_name = index_tk.value}
+		return {type = PARSE_TYPES.ID_REFER, id_name = id_tk.value, index_name = index_tk.value}
 		
 	elseif (tk.value == '(') then
 		tk_index = tk_index + 1
@@ -227,43 +260,47 @@ function parse_id(id_tk)
 end
 
 local function parse_null()
-	return {type = TK_TYPES.KEYWORD, value = "null"}
+	return {type = PARSE_TYPES.LITERAL, value = "null"}
 end
 
 local function parse_var()
 	local id_tk = expect_tk_of_type(TK_TYPES.ID)
-	print(tk_index)
 
 	-- gotta peak so 'tk_index' isn't 2 higher than #tokens
 	local tk = peek_tk()
 	
 	if (not tk or tk.value ~= '=') then
-		return {type = ND_TYPES.VAR, id_name = id_tk.value, value = parse_null()}
+		return {type = PARSE_TYPES.ID_REFER, id_name = id_tk.value, value = parse_null()}
 	end
 
 	local value_tk = peek_tk(1)
-	tk_index = tk_index + 2
-		
+	tk_index = tk_index + 1
+	
 	assert(value_tk, "Expected a number, string, identifier, 'null', '+', '-', or '(' token")
 	local value;
 
 	-- unary '+' and '-'
-	if (is_tk_type_or_value(value_tk, TK_TYPES.NUM, TK_TYPES.ID, '+', '-', '(')) then
+	if (is_tk_type_or_value(value_tk, TK_TYPES.NUM, TK_TYPES.ID, "true", "false", '!', '-', '(')) then
 		value = parse_expr()
 		
 	elseif (value_tk.type == TK_TYPES.STR) then
 		value = parse_str()
 		
 	elseif (value_tk.value == "null") then
+		tk_index = tk_index + 1
 		value = parse_null()
 	
 	else
-		error(fmt("Invalid %s token '%s', starting at index %d. Expected a number, string, identifier, '+', '-', or '(' token",
+		error(fmt("Invalid %s token '%s', starting at index %d. Expected a number, string, identifier, 'true', 'false', '+', '-', or '(' token",
 		  value_tk.type, value_tk.value, value_tk.src_start_index))
 
 	end
-	
-	return {type = ND_TYPES.VAR, id_name = id_tk.value, value =  value}
+
+	return {type = PARSE_TYPES.VAR, id_name = id_tk.value, value = value}
+end
+
+local function parse_assign()
+
 end
 
 function parse_statement()
@@ -280,33 +317,46 @@ function parse_statement()
 		
 	elseif (tk.type == TK_TYPES.ID) then
 		return parse_assign()
-		
-	elseif (tk.value == "end")
-		
+
+		-- Not my proudest code
+	else
+		tk_index = tk_index - 1
 	end
-	
-	error(fmt("Invalid %s token '%s', starting at index %d. Expected an identifier, 'var', 'fn', or 'if' token",
-	  tk.type, tk.value, tk.src_start_index))
 end
 
+-- should i just remove this?
 function parse_block()
 	local block = {}
-	
-	repeat
-		table.insert(block, parse_statement())
-		print(tk_index, #tokens)
-	until (
-end
-
-local function parse_tokens()
 	local statement;
 	
 	repeat
-		table.insert(parse_tree, parse_statement())
-		print(tk_index, #tokens)
+		statement = parse_statement()
+		if (not statement) then break end
+		  
+		table.insert(block, statement)
 	until (tk_index == #tokens + 1)
 
-	pretty_tb_print(parse_tree)
+	return block
+end
+
+local function parse_tokens()
+	local parse_tree = {}
+	local statement;
+	
+	repeat
+		statement = parse_statement()
+		
+		if (not statement) then
+			local tk = tokens[tk_index]
+			
+			error(fmt("Invalid %s token '%s', starting at index %d. Expected an identifier, 'var', 'fn', or 'if' token",
+			  tk.type, tk.value, tk.src_start_index))
+		end
+		  
+		table.insert(parse_tree, statement)
+	until (tk_index == #tokens + 1)
+	
+	print_pretty_tb(parse_tree)
 end
 
 local function lex_src_text()
@@ -458,7 +508,7 @@ local function main()
         src_text = file:read("*all")
 
         lex_src_text()
-        print(pretty_tb_print(tokens))
+        print(print_pretty_tb(tokens))
 
 	parse_tokens(tokens)
 end

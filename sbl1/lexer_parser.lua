@@ -2,6 +2,9 @@
 	NOTES:
 		GNU Nano displays a tab as multiple columns, while lua treats a tab as just one character
 		numbers starting with period shall not be supported for now (eg. ".23")
+	FUTURE:
+		I should probably add a 'debug env' to allow for type checking during parsing
+		(eg. struct a = {}, "a[2]" would be invalid and error)
 ]]
 
 --[=[
@@ -17,6 +20,9 @@
 local pretty_table = require("pretty_table")
 
 local fmt = string.format
+local tb_insert = table.insert
+local str_sub = string.sub
+
 local function print_pretty_tb(tb) print(pretty_table(tb)) end
 
 -- slightly more detailed for use of debugging messages
@@ -37,12 +43,13 @@ local TK_TYPES = {
 local PARSE_TYPES = {
 	FN = "fn",
 	FN_CALL = "fn_call",
-	STRUCT_INDEX_REFER = "struct_index_refer",
+	STRUCT_INDEX = "struct_index",
+	ARRAY_INDEX = "array_index",
+	REASSIGN = "reassign",
 	IF = "if",
 	ELIF = "elif",
 	DECLARE = "declare",
 	BLOCK = "block",
-	ID_REFER = "id_refer",
 	BIN_EXPR = "binary_expr",
 	UNA_EXPR = "unary_expr",
 }
@@ -194,7 +201,7 @@ function parse_fn()
 		  fmt("Duplicate parameter '%s' at line %d, column %d for function '%s'.",
 		   param.value, param.src_line, param.src_column, id_tk.value))
 		  
-		table.insert(params, param.value)
+		tb_insert(params, param.value)
 		params_checks[param.value] = true
 		
 		expect_param = false
@@ -231,7 +238,7 @@ function parse_fn_call(id_tk)
 		local arg = parse_expr()
 		expect_arg = false
 		
-		table.insert(args, arg)
+		tb_insert(args, arg)
 		tk = next_tk()
 
 		if (tk.value == ')') then break end
@@ -269,7 +276,7 @@ local function parse_if()
 			assert(tk, "Expected keyword token 'end' or statements")
 
 			if (tk.value == "elif") then
-				table.insert(elif_statements, parse_elif())
+				tb_insert(elif_statements, parse_elif())
 				
 			elseif (tk.value == "else") then
 				else_block = parse_block()
@@ -290,7 +297,7 @@ local function parse_if()
 			end
 		end
 
-		table.insert(block, statement)
+		tb_insert(block, statement)
 	end]]
 
 	local block = parse_block()
@@ -299,7 +306,7 @@ local function parse_if()
 		local tk = next_tk()
 
 		if (tk.value == "elif") then
-			table.insert(elif_statements, parse_elif())
+			tb_insert(elif_statements, parse_elif())
 			
 		elseif (tk.value == "else") then
 			else_block = parse_block()
@@ -317,29 +324,55 @@ local function parse_if()
 	return {type = PARSE_TYPES.IF, cond = cond, block = block, elif_statements = elif_statements, else_block = else_block}
 end
 
+local function parse_index_path(id_tk)
+	local index_path = {}
+	
+ 	while (true) do
+ 		local tk = peek_tk()
+ 		local index;
+
+		if (tk.value == '.') then
+			tk_index = tk_index + 1
+			
+			index = expect_tk_of_type(TK_TYPES.ID, fmt("Expected an identifier token for indexing struct '%s'.", id_tk.value))
+			tb_insert(index_path, {type = PARSE_TYPES.STRUCT_INDEX, value = index})
+							
+		elseif (tk.value == '[') then
+			tk_index = tk_index + 1
+			
+			index = parse_expr()
+			tb_insert(index_path, {type = PARSE_TYPES.ARRAY_INDEX, value = index})
+
+			expect_tk_of_value(']', fmt("Expected misc token ']' for closing indexing of struct OR array '%s'.", id_tk.value))
+		else
+			break
+		end
+ 	end
+
+ 	return index_path
+end
+
 -- parse id when it is the value itself (eg. var b = a)
 function parse_id_value(id_tk)
 	local tk = peek_tk()
-
+	-- print("ASD ", pretty_table(tk))
+	
 	if (tk.value == '.') then
-		-- support multiple indexing (eg. var x = a.b.c.d)
-		local index_tk = peek_tk(1)
-
-		assert(index_tk.type == TK_TYPES.ID,
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected identifier token for indexing struct '%s'",
-		  index_tk.type, index_tk.value, index_tk.src_line, index_tk.src_column, id_tk.value))
-
-		tk_index = tk_index + 2	  
+		-- index struct by literal
 		
-		return {type = PARSE_TYPES.STRUCT_INDEX_REFER, id_name = id_tk.value, index_name = index_tk.value,
+		return {type = PARSE_TYPES.STRUCT_INDEX, id_name = id_tk.value, index_path = parse_index_path(id_tk),
 		  src_line = id_tk.src_line, src_column = id_tk.src_column}
-		
+		  
+	elseif (tk.value == '[') then
+		return {type = PARSE_TYPES.ARRAY_INDEX, id_name = id_tk.value, index_path = parse_index_path(id_tk),
+		  src_line = id_tk.src_line, src_column = id_tk.src_column}
+		  
 	elseif (tk.value == '(') then
 		tk_index = tk_index + 1
 		return parse_fn_call(id_tk)
 	end
 
-	return {type = PARSE_TYPES.ID_REFER, id_name = id_tk.value, src_line = id_tk.src_line, src_column = id_tk.src_column}
+	return id_tk
 end
 
 -- bro should i just remove this?
@@ -359,9 +392,9 @@ local function parse_var()
 	end
 	
 	tk_index = tk_index + 1
-	local value_tk = peek_tk()	
-	local value;
+	return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_assign_value()}
 
+	--[[
 	--												 unary '-'
 	if (is_tk_type_or_value(value_tk, TK_TYPES.NUM, TK_TYPES.ID, TK_TYPES.STR, "null", "true", "false", '!', '-', '(')) then
 		return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_expr()}
@@ -370,10 +403,29 @@ local function parse_var()
 	error(fmt("Invalid %s token '%s', at line %d, column %d. Expected a number, string, identifier, 'true', 'false', '+', '-', or '(' token"..
 	  " to assign value for identifier '%s'",
 	  value_tk.type, value_tk.value, value_tk.src_line, value_tk.src_column, id_tk.value))
+	]]
 end
 
-local function parse_assign()
+function parse_struct()
+	
+end
 
+function parse_assign_value()
+	local value;
+	local tk = peek_tk()
+	
+	if (tk.value == '{') then
+		tk_index = tk_index + 1
+		value = parse_struct()
+		
+	elseif (tk.value == '[') then
+		tk_index = tk_index + 1
+		value = parse_array()
+	else
+		value = parse_expr()
+	end
+	
+	return value
 end
 
 function parse_statement()
@@ -392,10 +444,11 @@ function parse_statement()
 		local second_tk = next_tk()
 
 		if (second_tk.value == '=') then
-			return parse_assign()
+			return {type = PARSE_TYPES.REASSIGN, id_name = tk.value, value = parse_assign_value()}
 			
 		elseif (second_tk.type == TK_TYPES.COMP_NUM_OP) then
-
+			local op =  string.sub(second_tk.value, 1, 1)
+			return {type = PARSE_TYPES.BIN_EXPR, left = tk, op = op, right = parse_expr()}
 
 		elseif (second_tk.value == '(') then
 			return parse_fn_call(tk)
@@ -418,7 +471,7 @@ function parse_block()
 		statement = parse_statement()
 		if (not statement) then break end
 		  
-		table.insert(block, statement)
+		tb_insert(block, statement)
 	until (peek_tk().value == "EOF")
 
 	return block
@@ -439,7 +492,8 @@ local function lex_src_text(src_file)
 	-- i hate it here, why?
 	
 	local NUM_OPS = {['+'] = true, ['-'] = true, ['*'] = true, ['/'] = true}	
-	local MISC = {['('] = true, [')'] = true, ['.'] = true, [','] = true}
+	local MISC = {['('] = true, [')'] = true, ['.'] = true, [','] = true, ['['] = true,
+	  [']'] = true, ['{'] = true, ['}'] = true}
 	
 	local KEYWORDS = {["var"] = true, ["fn"] = true, ["if"] = true, ["else"] = true,
 	  ["elif"] = true, ["end"] = true, [""] = true, ["if"] = true, ["if"] = true,
@@ -454,14 +508,14 @@ local function lex_src_text(src_file)
 
 		while (true) do
 			char_index = char_index + 1
-			local char = string.sub(current_line, char_index, char_index)
+			local char = str_sub(current_line, char_index, char_index)
 			
 			if (not string.match(char, '%d')) then
 				if (char == '.') then
 					assert(not has_decimal_point, "Unexpected extra decimal point for number")
 					has_decimal_point = true
 				else
-					local num = string.sub(current_line, NUM_START_INDEX, char_index - 1)
+					local num = str_sub(current_line, NUM_START_INDEX, char_index - 1)
 					return {type = TK_TYPES.NUM, value = tonumber(num), src_line = line_count, src_column = NUM_START_INDEX}
 				end
 			end
@@ -475,7 +529,7 @@ local function lex_src_text(src_file)
 		
 		while (true) do
 			char_index = char_index + 1
-			local char = string.sub(current_line, char_index, char_index)
+			local char = str_sub(current_line, char_index, char_index)
 			str = str.. char
 			
 			if (char == '"') then
@@ -503,10 +557,10 @@ local function lex_src_text(src_file)
 		
 		while (true) do
 			char_index = char_index + 1
-			local char = string.sub(current_line, char_index, char_index)
+			local char = str_sub(current_line, char_index, char_index)
 
 			if (not string.match(char, "[%a%d_]")) then
-				local value = string.sub(current_line, VALUE_START_INDEX, char_index - 1)
+				local value = str_sub(current_line, VALUE_START_INDEX, char_index - 1)
 				local token_type = (KEYWORDS[value]) and TK_TYPES.KEYWORD or TK_TYPES.ID
 				
 				return {type = token_type, value = value, src_line = line_count, src_column = VALUE_START_INDEX}
@@ -516,7 +570,7 @@ local function lex_src_text(src_file)
 
 	local function lex_num_op(num_op)
 		char_index = char_index + 1
-		local next_char = string.sub(current_line, char_index, char_index)
+		local next_char = str_sub(current_line, char_index, char_index)
 		
 		if (next_char == '=') then
 			char_index = char_index + 1
@@ -531,53 +585,53 @@ local function lex_src_text(src_file)
 		if (#current_line == 0) then goto skip_current_line end
 			
 		while (char_index ~= #current_line + 1) do
-			local char = string.sub(current_line, char_index, char_index)
+			local char = str_sub(current_line, char_index, char_index)
 			
 			if (string.match(char, '%s')) then
 				char_index = char_index + 1
 				
 			elseif (string.match(char, '%d')) then
 				local HAS_DECIMAL_POINT = false
-				table.insert(tokens, lex_num(HAS_DECIMAL_POINT))
+				tb_insert(tokens, lex_num(HAS_DECIMAL_POINT))
 
 			-- why, i should just form numbers during parsing instead
 			elseif (char == '"') then
-				table.insert(tokens, lex_str())
+				tb_insert(tokens, lex_str())
 			
 			elseif (char == '_' or string.match(char, '%a')) then
-				table.insert(tokens, lex_id_or_keyword())
+				tb_insert(tokens, lex_id_or_keyword())
 				
 			elseif (MISC[char]) then
-				table.insert(tokens, {type = TK_TYPES.MISC, value = char, src_line = line_count, src_column = char_index})
+				tb_insert(tokens, {type = TK_TYPES.MISC, value = char, src_line = line_count, src_column = char_index})
 				char_index = char_index + 1
 				
 			elseif (NUM_OPS[char]) then
 				local tk_type, num_op = lex_num_op(char)
-				table.insert(tokens, {type = tk_type, value = num_op, src_line = line_count, src_column = char_index})
+				tb_insert(tokens, {type = tk_type, value = num_op, src_line = line_count, src_column = char_index})
 
 			elseif (char == '!') then
-				table.insert(tokens, {type = TK_TYPES.BOOL_OP, value = '!', src_line = line_count, src_column = char_index})
+				tb_insert(tokens, {type = TK_TYPES.BOOL_OP, value = '!', src_line = line_count, src_column = char_index})
 				char_index = char_index + 1
 				-- yuck,wish i had an elegant solution instead of these if statements			
 					
 			elseif (char == '=') then
 				char_index = char_index + 1
 
-				local next_char = string.sub(current_line, char_index, char_index)
+				local next_char = str_sub(current_line, char_index, char_index)
 
 				if (next_char == '=') then
-					table.insert(tokens, {type = TK_TYPES.BOOL_OP, value = "==", src_line = line_count, src_column = char_index})
+					tb_insert(tokens, {type = TK_TYPES.BOOL_OP, value = "==", src_line = line_count, src_column = char_index})
 					char_index = char_index + 1
 				else
-					table.insert(tokens, {type = TK_TYPES.MISC, value = '=', src_line = line_count, src_column = char_index})
+					tb_insert(tokens, {type = TK_TYPES.MISC, value = '=', src_line = line_count, src_column = char_index})
 				end
 
 			elseif (char == '|' or char == '&') then
-				local next_char = string.sub(current_line, char_index + 1, char_index + 1)
+				local next_char = str_sub(current_line, char_index + 1, char_index + 1)
 				local bool_op = char.. char
 				assert(next_char == char, fmt("Expected symbol '%s' for lexing boolean operator '%s'", char, char.. char))
 
-				table.insert(tokens, {type = TK_TYPES.BOOL_OP, value = bool_op, src_line = line_count, src_column = char_index})
+				tb_insert(tokens, {type = TK_TYPES.BOOL_OP, value = bool_op, src_line = line_count, src_column = char_index})
 				char_index = char_index + 2
 
 			else
@@ -590,7 +644,7 @@ local function lex_src_text(src_file)
 		current_line = src_file:read("*line")
 
 		if (not current_line) then
-			table.insert(tokens, {type = TK_TYPES.MISC, value = "EOF", src_line = line_count, src_column = char_index})
+			tb_insert(tokens, {type = TK_TYPES.MISC, value = "EOF", src_line = line_count, src_column = char_index})
 			break
 		end
 

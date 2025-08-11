@@ -1,12 +1,12 @@
 --[[
 	NOTES:
 		GNU Nano displays a tab as multiple columns, while lua treats a tab as just one character
+		numbers starting with period shall not be supported for now (eg. ".23")
 ]]
 
 --[=[
   priority:
   	allow for multi variable declarations (eg. var a, b, c, d)
-  	implement better debugging
   	replace lexing same tokens with constant preset tokens
   	
   expressions list:
@@ -63,8 +63,6 @@ local NUM_UNA_PREC = 5
 local BOOL_UNA_PREC = 5
 		
 local tokens = {}
-local code_parse_tree = {}
-
 local tk_index = 1
 
 local function next_tk()
@@ -81,20 +79,18 @@ end
 
 -- mode for 'peek' or 'next'?
 -- FIXME you 
-local function expect_tk_of_type(type)
+local function expect_tk_of_type(type, fail_msg_detail)
 	local tk = next_tk()
-	
-	assert(tk, fmt("Expected %s token", type))
-	assert(tk.type == type, fmt("Invalid %s token '%s', expected %s token", tk.type, tk.value, type))
+	assert(tk.type == type,
+	  fmt("Invalid %s token '%s' at line %d, column %d. ".. fail_msg_detail, tk.type, tk.value, tk.src_line, tk.src_column))
 	return tk
 end
 
 -- 'type_debug' solely just to spice up error messages
-local function expect_tk_of_value(type_debug, value)
+local function expect_tk_of_value(value, fail_msg_detail)
 	local tk = next_tk()
-
-	assert(tk, fmt("Expected %s token '%s'", type_debug, value))
-	assert(tk.value == value, fmt("Invalid %s token '%s'. Expected %s token '%s'", tk.type, tk.value, type_debug, value))
+	assert(tk.value == value,
+	  fmt("Invalid %s token '%s' at line %d, column %d. ".. fail_msg_detail, tk.type, tk.value, tk.src_line, tk.src_column))
 	return tk
 end
 
@@ -124,7 +120,7 @@ local function null_denot(tk)
 		
 	elseif (tk.value == '(') then
 		local expr = parse_expr(0, is_bool_expr)
-		expect_tk_of_value(TK_TYPES.MISC, ')')
+		expect_tk_of_value(')', "Expected misc token ')' to finish sub-expression.")
 		return expr
 		
 	elseif (tk.type == TK_TYPES.ID) then
@@ -135,7 +131,8 @@ local function null_denot(tk)
 		return {type = PARSE_TYPES.UNA_EXPR, op = '!', right = parse_expr(BOOL_UNA_PREC, true)}
 	end		
 	
-	error(fmt("Invalid %s token '%s'. Expected number, identifier, '-', or '(' token for parsing expression", tk.type, tk.value))
+	error(fmt("Invalid %s token '%s' at line %d, column %d. Expected number, identifier, 'true', 'false', 'null', '-', or '(' token for parsing expression.",
+	  tk.type, tk.value, tk.src_line, tk.src_column))
 end
 
 -- would probably be helpful to note that it checks if next tk even exists at all
@@ -170,6 +167,52 @@ function parse_expr(prec_limit)
 	return left
 end
 
+function parse_fn()
+	local id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected identifier token for parsing function")
+	expect_tk_of_value('(',
+	  fmt("Expected misc token '(' for parsing parameters (or none) of function '%s'", id_tk.value))
+
+	local params = {}
+	local params_checks = {}
+	local expect_param = false
+
+	while (true) do
+		local tk = peek_tk()
+		
+		if (not expect_param) then
+			if (tk.value == ')') then 
+				tk_index = tk_index + 1
+				break
+			end
+		end
+
+		local param = expect_tk_of_type(TK_TYPES.ID,
+		  fmt("Expected an identifier token for parsing parameter of function '%s', or token ')' to close function parameter list",
+		   id_tk.value))
+
+		assert(not params_checks[param.value],
+		  fmt("Duplicate parameter '%s' at line %d, column %d for function '%s'.",
+		   param.value, param.src_line, param.src_column, id_tk.value))
+		  
+		table.insert(params, param.value)
+		params_checks[param.value] = true
+		
+		expect_param = false
+		
+		tk = next_tk()
+
+		if (tk.value == ')') then break end
+		assert(tk.value == ',',
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in function parameter list", tk.type, tk.value, tk.src_line, tk.src_column))
+		expect_arg = true
+	end
+
+	local block = parse_block()
+	expect_tk_of_value("end", fmt("Expected keyword token 'end' to close function '%s'", id_tk.value))
+
+	return {type = PARSE_TYPES.FN, id_name = id_tk.value, params = params, block = block}
+end
+
 -- should 'id_tk' param be removed and just read via peek or next tk fn maybe?
 function parse_fn_call(id_tk)
 	local args = {}
@@ -189,36 +232,36 @@ function parse_fn_call(id_tk)
 		expect_arg = false
 		
 		table.insert(args, arg)
-
 		tk = next_tk()
 
 		if (tk.value == ')') then break end
-		assert(tk.value == ',', fmt("Expected misc token ',', instead got %s token '%s'", tk.type, tk.value))
+		assert(tk.value == ',',
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in function call argument list", tk.type, tk.value, tk.src_line, tk.src_column))
 		expect_arg = true
 	end
 
 	return {type = PARSE_TYPES.FN_CALL, id_name = id_tk.value, args = args}
 end
 
-local function parse_if_clause()
-	expect_tk_of_value(TK_TYPES.MISC, '(')	
+local function parse_elif()
+	expect_tk_of_value('(', "Expected misc token '(' to parse elif statement condition.")	  
 	local cond = parse_expr(0, true)
-	expect_tk_of_value(TK_TYPES.MISC, ')')
+	expect_tk_of_value(')', "Expected misc token ')' to close elif statement condition.")
 
 	local block = parse_block()
 	return {type = PARSE_TYPES.ELIF, cond = cond, block = block}	
 end
 
 local function parse_if()
-	expect_tk_of_value(TK_TYPES.MISC, '(')	
+	expect_tk_of_value('(', "Expected misc token '(' to parse if statement condition.")
 	local cond = parse_expr(0, true)
-	expect_tk_of_value(TK_TYPES.MISC, ')')
+	expect_tk_of_value(')', "Expected misc token ')' to close if statement condition.")
 	
 	local block = {}
 	local elif_statements = {}
 	local else_block = nil
 
-	while (true) do
+	--[[while (true) do
 		local statement = parse_statement()
 		
 		if (not statement) then
@@ -226,7 +269,7 @@ local function parse_if()
 			assert(tk, "Expected keyword token 'end' or statements")
 
 			if (tk.value == "elif") then
-				table.insert(elif_statements, parse_if_clause())
+				table.insert(elif_statements, parse_elif())
 				
 			elseif (tk.value == "else") then
 				else_block = parse_block()
@@ -234,7 +277,7 @@ local function parse_if()
 				-- temporary debug lol
 				-- print("else: ", pretty_table(else_block))
 				-- print("SDSSDSDSD", tokens[tk_index], tk_index, #tokens)
-				expect_tk_of_value(TK_TYPES.KEYWORD, "end")
+				expect_tk_of_value("end", "Expected keyword token 'end' to close else statement.")
 
 				break
 				
@@ -242,39 +285,61 @@ local function parse_if()
 				break
 				
 			else
-				error(fmt("Invalid %s token '%s', starting at index %d. Expected an identifier, 'var', 'fn', 'if' token, or 'end'  token to close block",
-			  	  tk.type, tk.value, tk.src_start_index))
+				error(fmt("Invalid %s token '%s' at line %d, column %d. Expected an identifier, 'var', 'fn', 'if' token, or 'end' token in if statement",
+			  	  tk.type, tk.value, tk.src_line, tk.src_column))
 			end
 		end
 
 		table.insert(block, statement)
+	end]]
+
+	local block = parse_block()
+
+	while (true) do
+		local tk = next_tk()
+
+		if (tk.value == "elif") then
+			table.insert(elif_statements, parse_elif())
+			
+		elseif (tk.value == "else") then
+			else_block = parse_block()
+			expect_tk_of_value("end", "Expected keyword token 'end' to close else statement.")
+			break
+			
+		elseif (tk.value == "end") then
+			break
+		else
+			error(fmt("Invalid %s token '%s' at line %d, column %d. Expected 'elif', 'else', or keyword token 'end' to close if statement.",
+			  tk.type, tk.value, tk.src_line, tk.src_column))
+		end
 	end
 
 	return {type = PARSE_TYPES.IF, cond = cond, block = block, elif_statements = elif_statements, else_block = else_block}
 end
 
--- parse id when it is the value itself
+-- parse id when it is the value itself (eg. var b = a)
 function parse_id_value(id_tk)
 	local tk = peek_tk()
 
 	if (tk.value == '.') then
-
 		-- support multiple indexing (eg. var x = a.b.c.d)
 		local index_tk = peek_tk(1)
 
-		assert(index_tk, fmt("Expected identifier token for indexing struct %s", id_tk.value))
 		assert(index_tk.type == TK_TYPES.ID,
-		  fmt("Invalid %s token '%s'. Expected identifier token for indexing struct %s", index_tk.type, index_tk.value, id_tk.value))
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected identifier token for indexing struct '%s'",
+		  index_tk.type, index_tk.value, index_tk.src_line, index_tk.src_column, id_tk.value))
 
 		tk_index = tk_index + 2	  
-		return {type = PARSE_TYPES.STRUCT_INDEX_REFER, id_name = id_tk.value, index_name = index_tk.value}
+		
+		return {type = PARSE_TYPES.STRUCT_INDEX_REFER, id_name = id_tk.value, index_name = index_tk.value,
+		  src_line = id_tk.src_line, src_column = id_tk.src_column}
 		
 	elseif (tk.value == '(') then
 		tk_index = tk_index + 1
 		return parse_fn_call(id_tk)
 	end
 
-	return {type = PARSE_TYPES.ID_REFER, id_name = id_tk.value}
+	return {type = PARSE_TYPES.ID_REFER, id_name = id_tk.value, src_line = id_tk.src_line, src_column = id_tk.src_column}
 end
 
 -- bro should i just remove this?
@@ -284,7 +349,7 @@ end
 
 -- the manual tk_index incrementing is atrocious, never skip planning!
 local function parse_var()
-	local id_tk = expect_tk_of_type(TK_TYPES.ID)
+	local id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected identifier token to parse var.")
 
 	-- gotta peak so 'tk_index' isn't 2 higher than #tokens
 	local tk = peek_tk()
@@ -321,7 +386,7 @@ function parse_statement()
 		return parse_if()
 		
 	elseif (tk.value == "fn") then
-		-- parse_fn()	
+		return parse_fn()	
 		
 	elseif (tk.type == TK_TYPES.ID) then
 		local second_tk = next_tk()
@@ -336,8 +401,8 @@ function parse_statement()
 			return parse_fn_call(tk)
 		end
 
-		error(fmt("Invalid %s token '%s' at line %d, column %d",
-		  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column))
+		error(fmt("Invalid %s token '%s' at line %d, column %d. Expected assignment or function call for identifier '%s'.",
+		  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column, tk.value))
 	else
 		-- allow for this unmatched token to be read by whatever called this fn (eg. if it's "end", "for", etc)
 		tk_index = tk_index - 1
@@ -360,20 +425,14 @@ function parse_block()
 end
 
 local function parse_tokens()
-	local statement;
-	
-	repeat
-		statement = parse_statement()
-		
-		if (not statement) then
-			local tk = tokens[tk_index]
-			
-			error(fmt("Invalid %s token '%s' at line %d, column %d. Expected an identifier, 'var', 'fn', or 'if' token",
-			  tk.type, tk.value, tk.src_line, tk.src_column))
-		end
-		  
-		table.insert(code_parse_tree, statement)
-	until (peek_tk().value == "EOF")	
+	local code_parse_tree = parse_block()
+	local tk = next_tk()
+
+	-- if token 'EOF' not reached, it must mean that an invalid token caused 'parse_block' to stop
+	assert(tk.value == "EOF", fmt("Invalid %s token '%s' at line %d, column %d. Expected an identifier, 'var', 'fn', or 'if' token",
+	  tk.type, tk.value, tk.src_line, tk.src_column))
+
+	return code_parse_tree
 end
 
 local function lex_src_text(src_file)
@@ -482,10 +541,6 @@ local function lex_src_text(src_file)
 				table.insert(tokens, lex_num(HAS_DECIMAL_POINT))
 
 			-- why, i should just form numbers during parsing instead
-			elseif (char == '.' and string.match( string.sub(current_line, char_index + 1, char_index + 1), '%d') ) then
-				local HAS_DECIMAL_POINT = true
-				table.insert(tokens, lex_num(HAS_DECIMAL_POINT))
-
 			elseif (char == '"') then
 				table.insert(tokens, lex_str())
 			
@@ -550,7 +605,7 @@ return function(src_file)
 	lex_src_text(src_file)
 	print_pretty_tb(tokens)
 	
-	parse_tokens()
+	local code_parse_tree = parse_tokens()
 
 	print_pretty_tb(code_parse_tree)
 	return code_parse_tree

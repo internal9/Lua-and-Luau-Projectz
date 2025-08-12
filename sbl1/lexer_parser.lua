@@ -43,6 +43,7 @@ local TK_TYPES = {
 local PARSE_TYPES = {
 	FN = "fn",
 	FN_CALL = "fn_call",
+	INDEX_PATH_ASSIGN = "index_path_assign",
 	INDEX_PATH = "index_path",
 	STRUCT_INDEX = "struct_index",
 	ARRAY_INDEX = "array_index",
@@ -292,7 +293,7 @@ local function parse_if()
 	return {type = PARSE_TYPES.IF, cond = cond, block = block, elif_statements = elif_statements, else_block = else_block}
 end
 
-local function parse_index_path()
+function parse_index_path(id_tk)
 	local index_path = {}
 	
  	while (true) do
@@ -316,23 +317,7 @@ local function parse_index_path()
 		end
  	end
 
- 	return index_path
-end
-
--- parse id when it is the value itself (eg. var b = a)
-function parse_id_value(id_tk)
-	local tk = peek_tk()
-	
-	if (tk.value == '.' or tk.value == '[') then
-		return {type = PARSE_TYPES.INDEX_PATH, id_name = id_tk.value, value = parse_index_path()}
-		  
-	elseif (tk.value == '(') then
-		tk_index = tk_index + 1
-		return parse_fn_call(id_tk)
-	end
-
-	-- allow for peeked tk to be read for something else
-	return id_tk
+ 	return {type = PARSE_TYPES.INDEX_PATH, id_name = id_tk.value, value = index_path}
 end
 
 -- bro should i just remove this?
@@ -439,6 +424,46 @@ function parse_assign_value()
 	return parse_expr()	
 end
 
+-- parse id when it is the value itself (eg. var b = a)
+function parse_id_value(id_tk)
+	local tk = peek_tk()
+	
+	if (tk.value == '.' or tk.value == '[') then
+		return parse_index_path(id_tk)
+		  
+	elseif (tk.value == '(') then
+		tk_index = tk_index + 1
+		return parse_fn_call(id_tk)
+	end
+
+	-- allow for peeked tk to be read for something else
+	return id_tk
+end
+
+-- parse id when it's a statement (eg. a = 2, arr[0] = 5)
+function parse_id(id_tk)
+	local second_tk = next_tk()
+
+	if (second_tk.value == '=') then
+		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = parse_assign_value()}
+		
+	elseif (second_tk.type == TK_TYPES.COMP_NUM_OP) then
+		local op =  string.sub(second_tk.value, 1, 1)
+		local value = {type = PARSE_TYPES.BIN_EXPR, left = id_tk.value, op = op, right = parse_expr()}
+		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = value}
+
+	elseif (second_tk.value == '(') then
+		return parse_fn_call(tk)
+		
+	elseif (second_tk.value == '.' or second_tk.value == '[') then
+		tk_index = tk_index - 1
+		return parse_index_path(id_tk)
+	end
+
+	error(fmt("Invalid %s token '%s' at line %d, column %d. Expected assignment or function call for identifier '%s'.",
+	  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column, tk.value))
+end
+
 function parse_statement()
 	local tk = next_tk()
 	
@@ -452,21 +477,7 @@ function parse_statement()
 		return parse_fn()	
 		
 	elseif (tk.type == TK_TYPES.ID) then
-		local second_tk = next_tk()
-
-		if (second_tk.value == '=') then
-			return {type = PARSE_TYPES.REASSIGN, id_name = tk.value, value = parse_assign_value()}
-			
-		elseif (second_tk.type == TK_TYPES.COMP_NUM_OP) then
-			local op =  string.sub(second_tk.value, 1, 1)
-			return {type = PARSE_TYPES.BIN_EXPR, left = tk, op = op, right = parse_expr()}
-
-		elseif (second_tk.value == '(') then
-			return parse_fn_call(tk)
-		end
-
-		error(fmt("Invalid %s token '%s' at line %d, column %d. Expected assignment or function call for identifier '%s'.",
-		  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column, tk.value))
+		return parse_id(tk)
 	else
 		-- allow for this unmatched token to be read by whatever called this fn (eg. if it's "end", "for", etc)
 		tk_index = tk_index - 1

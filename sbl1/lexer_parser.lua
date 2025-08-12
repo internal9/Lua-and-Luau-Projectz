@@ -43,6 +43,7 @@ local TK_TYPES = {
 local PARSE_TYPES = {
 	FN = "fn",
 	FN_CALL = "fn_call",
+	INDEX_PATH = "index_path",
 	STRUCT_INDEX = "struct_index",
 	ARRAY_INDEX = "array_index",
 	REASSIGN = "reassign",
@@ -243,7 +244,8 @@ function parse_fn_call(id_tk)
 
 		if (tk.value == ')') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in function call argument list", tk.type, tk.value, tk.src_line, tk.src_column))
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in function call argument list or misc token ')' to close function call for function '%s'.",
+		  tk.type, tk.value, tk.src_line, tk.src_column, id_tk.value))
 		expect_arg = true
 	end
 
@@ -343,7 +345,7 @@ local function parse_index_path(id_tk)
 			index = parse_expr()
 			tb_insert(index_path, {type = PARSE_TYPES.ARRAY_INDEX, value = index})
 
-			expect_tk_of_value(']', fmt("Expected misc token ']' for closing indexing of struct OR array '%s'.", id_tk.value))
+			expect_tk_of_value(']', fmt("Expected misc token ']' for closing indexing of array '%s'.", id_tk.value))
 		else
 			break
 		end
@@ -357,14 +359,10 @@ function parse_id_value(id_tk)
 	local tk = peek_tk()
 	-- print("ASD ", pretty_table(tk))
 	
-	if (tk.value == '.') then
+	if (tk.value == '.' or tk.value == '[') then
 		-- index struct by literal
 		
-		return {type = PARSE_TYPES.STRUCT_INDEX, id_name = id_tk.value, index_path = parse_index_path(id_tk),
-		  src_line = id_tk.src_line, src_column = id_tk.src_column}
-		  
-	elseif (tk.value == '[') then
-		return {type = PARSE_TYPES.ARRAY_INDEX, id_name = id_tk.value, index_path = parse_index_path(id_tk),
+		return {type = PARSE_TYPES.INDEX_PATH, id_name = id_tk.value, index_path = parse_index_path(id_tk),
 		  src_line = id_tk.src_line, src_column = id_tk.src_column}
 		  
 	elseif (tk.value == '(') then
@@ -390,7 +388,7 @@ local function parse_var()
 	if (tk.value ~= '=') then
 		return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_null()}
 	end
-	
+
 	tk_index = tk_index + 1
 	return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_assign_value()}
 
@@ -407,25 +405,76 @@ local function parse_var()
 end
 
 function parse_struct()
+	local elements = {}
+
+	-- surely there is a better way to do this entire thing lol?
+	if (peek_tk().value == '}') then
+		tk_index = tk_index + 1
+
+		-- huh gotos are kinda useful
+		goto skip_parse
+	end
 	
+	while (true) do
+		local key_tk = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token for key of struct.")
+		
+		expect_tk_of_value('=', fmt("Expected misc token '=' for assigning value to element '%s' of struct.",
+		  key_tk.value))
+
+		assert(not elements[key_tk.value], fmt("Duplicate element '%s' in struct at line %d, column %d.",
+		  key_tk.value, key_tk.src_line, key_tk.src_column))
+		  
+		elements[key_tk.value] = parse_assign_value()
+		
+		local tk = next_tk()
+
+		if (tk.value == '}') then break end
+		assert(tk.value == ',',
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing elements or misc token '}' to close struct.",
+		  tk.type, tk.value, tk.src_line, tk.src_column))
+	end
+
+	::skip_parse::
+	return {type = PARSE_TYPES.STRUCT, elements = elements}
+end
+
+function parse_array()
+	local elements = {}
+
+	-- surely there is a better way to do this entire thing lol?
+	if (peek_tk().value == ']') then
+		tk_index = tk_index + 1
+		goto skip_parse
+	end
+
+	while (true) do	
+		-- NOTE: index starts at 1 in lua
+		tb_insert(elements, parse_assign_value())
+		local tk = next_tk()
+
+		if (tk.value == ']') then break end
+		assert(tk.value == ',',
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing elements or misc token '}' to close array",
+		  tk.type, tk.value, tk.src_line, tk.src_column))
+	end
+
+	::skip_parse::
+	return {type = PARSE_TYPES.ARRAY, elements = elements}
 end
 
 function parse_assign_value()
-	local value;
-	local tk = peek_tk()
+	local tk = next_tk()
 	
 	if (tk.value == '{') then
-		tk_index = tk_index + 1
-		value = parse_struct()
+		return parse_struct()
 		
 	elseif (tk.value == '[') then
-		tk_index = tk_index + 1
-		value = parse_array()
-	else
-		value = parse_expr()
+		return parse_array()
 	end
-	
-	return value
+
+	-- allow this token to be read by 'parse_expr'
+	tk_index = tk_index - 1	
+	return parse_expr()	
 end
 
 function parse_statement()

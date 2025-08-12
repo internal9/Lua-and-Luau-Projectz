@@ -8,7 +8,7 @@ function tableToPrettyString(tb)
     local function indentMultiLineString(str, nestedCount)
       local indentedStr = str:gsub("[^\n]+", function(part)
         -- is part the start of the string? if not, then that means a newline char precedes it
-        if str:find(part) ~= 1 then
+        if str:find(part, nil, true) ~= 1 then
           return string.rep(" ", nestedCount).. part
         end
       end)

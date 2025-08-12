@@ -5,6 +5,8 @@
 	FUTURE:
 		I should probably add a 'debug env' to allow for type checking during parsing
 		(eg. struct a = {}, "a[2]" would be invalid and error)
+
+		Should I replace 'value' in all of the parse_types with more descriptive names?
 ]]
 
 --[=[
@@ -293,7 +295,7 @@ local function parse_if()
 	return {type = PARSE_TYPES.IF, cond = cond, block = block, elif_statements = elif_statements, else_block = else_block}
 end
 
-function parse_index_path(id_tk)
+function form_index_path()
 	local index_path = {}
 	
  	while (true) do
@@ -317,7 +319,7 @@ function parse_index_path(id_tk)
 		end
  	end
 
- 	return {type = PARSE_TYPES.INDEX_PATH, id_name = id_tk.value, value = index_path}
+ 	return index_path
 end
 
 -- bro should i just remove this?
@@ -425,11 +427,12 @@ function parse_assign_value()
 end
 
 -- parse id when it is the value itself (eg. var b = a)
+-- this is only used by 'parse_expr'
 function parse_id_value(id_tk)
 	local tk = peek_tk()
 	
 	if (tk.value == '.' or tk.value == '[') then
-		return parse_index_path(id_tk)
+		return {type = PARSE_TYPES.INDEX_PATH, id_name = id_tk.value, value = form_index_path()}
 		  
 	elseif (tk.value == '(') then
 		tk_index = tk_index + 1
@@ -449,19 +452,23 @@ function parse_id(id_tk)
 		
 	elseif (second_tk.type == TK_TYPES.COMP_NUM_OP) then
 		local op =  string.sub(second_tk.value, 1, 1)
-		local value = {type = PARSE_TYPES.BIN_EXPR, left = id_tk.value, op = op, right = parse_expr()}
+		local value = {type = PARSE_TYPES.BIN_EXPR, left = id_tk, op = op, right = parse_expr()}
 		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = value}
 
 	elseif (second_tk.value == '(') then
-		return parse_fn_call(tk)
+		return parse_fn_call(id_tk)
 		
 	elseif (second_tk.value == '.' or second_tk.value == '[') then
+		-- allow for '[' or '.' tk to be read by 'form_index_path', ik it's not very 'clean'
 		tk_index = tk_index - 1
-		return parse_index_path(id_tk)
+		local index_path = form_index_path()
+
+		expect_tk_of_value('=', "Expected misc token '=' for assigning value to index path.")
+		return {type = PARSE_TYPES.INDEX_PATH_ASSIGN, id_name = id_tk.value, index_path = index_path, value = parse_expr()}
 	end
 
 	error(fmt("Invalid %s token '%s' at line %d, column %d. Expected assignment or function call for identifier '%s'.",
-	  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column, tk.value))
+	  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column, id_tk.value))
 end
 
 function parse_statement()
@@ -485,6 +492,7 @@ function parse_statement()
 end
 
 -- should i just remove this?
+-- edit: NAH
 function parse_block()
 	local block = {}
 	local statement;
@@ -526,7 +534,7 @@ local function lex_src_text(src_file)
 	local line_count = 1
 
 	local function lex_num(has_decimal_point)
-		local NUM_START_INDEX = char_index
+		local SRC_COLUMN = char_index
 
 		while (true) do
 			char_index = char_index + 1
@@ -537,16 +545,16 @@ local function lex_src_text(src_file)
 					assert(not has_decimal_point, "Unexpected extra decimal point for number")
 					has_decimal_point = true
 				else
-					local num = str_sub(current_line, NUM_START_INDEX, char_index - 1)
-					return {type = TK_TYPES.NUM, value = tonumber(num), src_line = line_count, src_column = NUM_START_INDEX}
+					local num = str_sub(current_line, SRC_COLUMN, char_index - 1)
+					return {type = TK_TYPES.NUM, value = tonumber(num), src_line = line_count, src_column = SRC_COLUMN}
 				end
 			end
 		end
 	end
 
 	local function lex_str()
-		local STR_START_INDEX = char_index
-		local STR_START_LINE = line_count
+		local SRC_COLUMN = char_index
+		local SRC_LINE = line_count
 		local str = '"'
 		
 		while (true) do
@@ -559,7 +567,7 @@ local function lex_src_text(src_file)
 
 				-- //temp
 				-- error(str)
-				return {type = TK_TYPES.STR, value = str, src_line = STR_START_LINE, src_column = STR_START_INDEX}
+				return {type = TK_TYPES.STR, value = str, src_line = SRC_LINE, src_column = SRC_COLUMN}
 			end
 
 			if (#current_line == 0 or char_index == #current_line + 1) then
@@ -570,36 +578,37 @@ local function lex_src_text(src_file)
 			end
 
 --			print(line_count, char_index, #current_line, char)
-			assert(current_line, fmt("Unclosed string literal at line %d, column %d", STR_START_LINE, STR_START_INDEX))
+			assert(current_line, fmt("Unclosed string literal beginning at line %d, column %d", SRC_LINE, SRC_COLUMN))
 		end
 	end
 
 	local function lex_id_or_keyword()
-		local VALUE_START_INDEX = char_index
+		local SRC_COLUMN = char_index
 		
 		while (true) do
 			char_index = char_index + 1
 			local char = str_sub(current_line, char_index, char_index)
 
 			if (not string.match(char, "[%a%d_]")) then
-				local value = str_sub(current_line, VALUE_START_INDEX, char_index - 1)
+				local value = str_sub(current_line, SRC_COLUMN, char_index - 1)
 				local token_type = (KEYWORDS[value]) and TK_TYPES.KEYWORD or TK_TYPES.ID
 				
-				return {type = token_type, value = value, src_line = line_count, src_column = VALUE_START_INDEX}
+				return {type = token_type, value = value, src_line = line_count, src_column = SRC_COLUMN}
 			end
 		end
 	end
 
 	local function lex_num_op(num_op)
+		local SRC_COLUMN = char_index
 		char_index = char_index + 1
 		local next_char = str_sub(current_line, char_index, char_index)
 		
 		if (next_char == '=') then
 			char_index = char_index + 1
-			return TK_TYPES.COMP_NUM_OP, num_op.. '='
-		else
-			return TK_TYPES.NUM_OP, num_op
+			return {type = TK_TYPES.COMP_NUM_OP, value = num_op.. '=', src_line = line_count, src_column = SRC_COLUMN}
 		end
+
+		return {type = TK_TYPES.NUM_OP, value = num_op, src_line = line_count, src_column = SRC_COLUMN}
 	end
 	
 	while (true) do	
@@ -628,8 +637,7 @@ local function lex_src_text(src_file)
 				char_index = char_index + 1
 				
 			elseif (NUM_OPS[char]) then
-				local tk_type, num_op = lex_num_op(char)
-				tb_insert(tokens, {type = tk_type, value = num_op, src_line = line_count, src_column = char_index})
+				tb_insert(tokens, lex_num_op(char))
 
 			elseif (char == '!') then
 				tb_insert(tokens, {type = TK_TYPES.BOOL_OP, value = '!', src_line = line_count, src_column = char_index})
@@ -637,15 +645,16 @@ local function lex_src_text(src_file)
 				-- yuck,wish i had an elegant solution instead of these if statements			
 					
 			elseif (char == '=') then
+				local SRC_COLUMN = char_index
 				char_index = char_index + 1
 
 				local next_char = str_sub(current_line, char_index, char_index)
 
 				if (next_char == '=') then
-					tb_insert(tokens, {type = TK_TYPES.BOOL_OP, value = "==", src_line = line_count, src_column = char_index})
+					tb_insert(tokens, {type = TK_TYPES.BOOL_OP, value = "==", src_line = line_count, src_column = SRC_COLUMN})
 					char_index = char_index + 1
 				else
-					tb_insert(tokens, {type = TK_TYPES.MISC, value = '=', src_line = line_count, src_column = char_index})
+					tb_insert(tokens, {type = TK_TYPES.MISC, value = '=', src_line = line_count, src_column = SRC_COLUMN})
 				end
 
 			elseif (char == '|' or char == '&') then

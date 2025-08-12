@@ -265,44 +265,10 @@ local function parse_if()
 	expect_tk_of_value('(', "Expected misc token '(' to parse if statement condition.")
 	local cond = parse_expr(0, true)
 	expect_tk_of_value(')', "Expected misc token ')' to close if statement condition.")
-	
-	local block = {}
+
+	local block = parse_block()	
 	local elif_statements = {}
 	local else_block = nil
-
-	--[[while (true) do
-		local statement = parse_statement()
-		
-		if (not statement) then
-			local tk = next_tk()
-			assert(tk, "Expected keyword token 'end' or statements")
-
-			if (tk.value == "elif") then
-				tb_insert(elif_statements, parse_elif())
-				
-			elseif (tk.value == "else") then
-				else_block = parse_block()
-
-				-- temporary debug lol
-				-- print("else: ", pretty_table(else_block))
-				-- print("SDSSDSDSD", tokens[tk_index], tk_index, #tokens)
-				expect_tk_of_value("end", "Expected keyword token 'end' to close else statement.")
-
-				break
-				
-			elseif (tk.value == "end") then
-				break
-				
-			else
-				error(fmt("Invalid %s token '%s' at line %d, column %d. Expected an identifier, 'var', 'fn', 'if' token, or 'end' token in if statement",
-			  	  tk.type, tk.value, tk.src_line, tk.src_column))
-			end
-		end
-
-		tb_insert(block, statement)
-	end]]
-
-	local block = parse_block()
 
 	while (true) do
 		local tk = next_tk()
@@ -326,7 +292,7 @@ local function parse_if()
 	return {type = PARSE_TYPES.IF, cond = cond, block = block, elif_statements = elif_statements, else_block = else_block}
 end
 
-local function parse_index_path(id_tk)
+local function parse_index_path()
 	local index_path = {}
 	
  	while (true) do
@@ -335,17 +301,16 @@ local function parse_index_path(id_tk)
 
 		if (tk.value == '.') then
 			tk_index = tk_index + 1
+			index = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token for indexing struct.")
 			
-			index = expect_tk_of_type(TK_TYPES.ID, fmt("Expected an identifier token for indexing struct '%s'.", id_tk.value))
 			tb_insert(index_path, {type = PARSE_TYPES.STRUCT_INDEX, value = index})
 							
 		elseif (tk.value == '[') then
 			tk_index = tk_index + 1
-			
 			index = parse_expr()
+			
 			tb_insert(index_path, {type = PARSE_TYPES.ARRAY_INDEX, value = index})
-
-			expect_tk_of_value(']', fmt("Expected misc token ']' for closing indexing of array '%s'.", id_tk.value))
+			expect_tk_of_value(']', "Expected misc token ']' for closing indexing of array.")
 		else
 			break
 		end
@@ -357,19 +322,16 @@ end
 -- parse id when it is the value itself (eg. var b = a)
 function parse_id_value(id_tk)
 	local tk = peek_tk()
-	-- print("ASD ", pretty_table(tk))
 	
 	if (tk.value == '.' or tk.value == '[') then
-		-- index struct by literal
-		
-		return {type = PARSE_TYPES.INDEX_PATH, id_name = id_tk.value, index_path = parse_index_path(id_tk),
-		  src_line = id_tk.src_line, src_column = id_tk.src_column}
+		return {type = PARSE_TYPES.INDEX_PATH, id_name = id_tk.value, value = parse_index_path()}
 		  
 	elseif (tk.value == '(') then
 		tk_index = tk_index + 1
 		return parse_fn_call(id_tk)
 	end
 
+	-- allow for peeked tk to be read for something else
 	return id_tk
 end
 
@@ -430,7 +392,7 @@ function parse_struct()
 
 		if (tk.value == '}') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing elements or misc token '}' to close struct.",
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing elements of struct or misc token '}' to close struct.",
 		  tk.type, tk.value, tk.src_line, tk.src_column))
 	end
 
@@ -454,7 +416,7 @@ function parse_array()
 
 		if (tk.value == ']') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing elements or misc token '}' to close array",
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing elements of array or misc token ']' to close array",
 		  tk.type, tk.value, tk.src_line, tk.src_column))
 	end
 

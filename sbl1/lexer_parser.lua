@@ -23,6 +23,7 @@ local pretty_table = require("pretty_table")
 
 local fmt = string.format
 local tb_insert = table.insert
+local str_match = string.match
 local str_sub = string.sub
 
 local function print_pretty_tb(tb) print(pretty_table(tb)) end
@@ -45,11 +46,14 @@ local TK_TYPES = {
 local PARSE_TYPES = {
 	FN = "fn",
 	FN_CALL = "fn_call",
+	ARRAY = "array",
+	STRUCT = "struct",
 	INDEX_PATH_ASSIGN = "index_path_assign",
 	INDEX_PATH = "index_path",
 	STRUCT_INDEX = "struct_index",
 	ARRAY_INDEX = "array_index",
 	REASSIGN = "reassign",
+	RET = "ret",
 	IF = "if",
 	ELIF = "elif",
 	DECLARE = "declare",
@@ -57,6 +61,8 @@ local PARSE_TYPES = {
 	BIN_EXPR = "binary_expr",
 	UNA_EXPR = "unary_expr",
 }
+
+
 
 --[[
 	implement associativaty, to account for right associative operator '^'
@@ -72,6 +78,62 @@ local OP_PRECS = {
 -- will change if '^' is added
 local NUM_UNA_PREC = 5
 local BOOL_UNA_PREC = 5
+
+-- yuk
+--[[
+local SCOPES = {
+	MAIN_BLOCK = {
+		[PARSE_TYPES.FN] = true,
+		[PARSE_TYPES.FN_CALL] = true,
+		[PARSE_TYPES.ARRAY] = true,
+		[PARSE_TYPES.STRUCT] = true,
+		[PARSE_TYPES.INDEX_PATH_ASSIGN] = true,
+		[PARSE_TYPES.INDEX_PATH] = true,
+		[PARSE_TYPES.STRUCT_INDEX] = true,
+		[PARSE_TYPES.ARRAY_INDEX] = true,
+		[PARSE_TYPES.REASSIGN] = true,
+		[PARSE_TYPES.IF] = true,
+		[PARSE_TYPES.ELIF] = true,
+		[PARSE_TYPES.DECLARE] = true
+	},
+	FN_BLOCK = {
+		[PARSE_TYPES.FN] = true,
+		[PARSE_TYPES.FN_CALL] = true,
+		[PARSE_TYPES.ARRAY] = true,
+		[PARSE_TYPES.STRUCT] = true,
+		[PARSE_TYPES.INDEX_PATH_ASSIGN] = true,
+		[PARSE_TYPES.INDEX_PATH] = true,
+		[PARSE_TYPES.STRUCT_INDEX] = true,
+		[PARSE_TYPES.ARRAY_INDEX] = true,
+		[PARSE_TYPES.REASSIGN] = true,
+		[PARSE_TYPES.IF] = true,
+		[PARSE_TYPES.ELIF] = true,
+		[PARSE_TYPES.DECLARE] = true,
+		[PARSE_TYPES.RET] = true
+	},
+	LOOP = {
+		[PARSE_TYPES.FN] = true,
+		[PARSE_TYPES.FN_CALL] = true,
+		[PARSE_TYPES.ARRAY] = true,
+		[PARSE_TYPES.STRUCT] = true,
+		[PARSE_TYPES.INDEX_PATH_ASSIGN] = true,
+		[PARSE_TYPES.INDEX_PATH] = true,
+		[PARSE_TYPES.STRUCT_INDEX] = true,
+		[PARSE_TYPES.ARRAY_INDEX] = true,
+		[PARSE_TYPES.REASSIGN] = true,
+		[PARSE_TYPES.IF] = true,
+		[PARSE_TYPES.ELIF] = true,
+		[PARSE_TYPES.DECLARE] = true,
+		[PARSE_TYPES.SKIP] = true
+	}
+}
+]]
+
+local SCOPES = {
+	FN_BLOCK = "fn_block",
+	LOOP_BLOCK = "loop_block",
+	LOOP_BLOCK_IN_FN = "loop_block_in_fn",
+}
 		
 local tokens = {}
 local tk_index = 1
@@ -178,6 +240,7 @@ function parse_expr(prec_limit)
 	return left
 end
 
+-- variadic parameters WILL ALWAYS be after named parameters
 function parse_fn()
 	local id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected identifier token for parsing function")
 	expect_tk_of_value('(',
@@ -186,9 +249,24 @@ function parse_fn()
 	local params = {}
 	local params_checks = {}
 	local expect_param = false
+	local has_variadic_params = false
 
 	while (true) do
 		local tk = peek_tk()
+
+		if (tk.value == '.') then
+			tk_index = tk_index + 1
+			
+			expect_tk_of_value('.',
+			  fmt("Expected two misc tokens '.' for parsing variadic parameters of function '%s'.", id_tk.value))
+			expect_tk_of_value('.',
+			  fmt("Expected misc token '.' for parsing variadic parameters of function '%s'.", id_tk.value))
+			expect_tk_of_value(')',
+			  fmt("Expected misc token ')' to close variadic parameters of function '%s'.", id_tk.value))
+
+			has_variadic_params = true
+			break
+		end
 		
 		if (not expect_param) then
 			if (tk.value == ')') then 
@@ -207,21 +285,23 @@ function parse_fn()
 		  
 		tb_insert(params, param.value)
 		params_checks[param.value] = true
-		
 		expect_param = false
 		
 		tk = next_tk()
-
 		if (tk.value == ')') then break end
+		
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in function parameter list", tk.type, tk.value, tk.src_line, tk.src_column))
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in function parameter list",
+		  tk.type, tk.value, tk.src_line, tk.src_column))
+		  
 		expect_arg = true
 	end
 
-	local block = parse_block()
+	local block = parse_block(SCOPES.FN_BLOCK)
 	expect_tk_of_value("end", fmt("Expected keyword token 'end' to close function '%s'", id_tk.value))
 
-	return {type = PARSE_TYPES.FN, id_name = id_tk.value, params = params, block = block}
+	return {type = PARSE_TYPES.FN, id_name = id_tk.value, params = params,
+	  has_variadic_params = has_variadic_params, block = block}
 end
 
 -- should 'id_tk' param be removed and just read via peek or next tk fn maybe?
@@ -255,21 +335,22 @@ function parse_fn_call(id_tk)
 	return {type = PARSE_TYPES.FN_CALL, id_name = id_tk.value, args = args}
 end
 
-local function parse_elif()
+local function parse_elif(scope)
 	expect_tk_of_value('(', "Expected misc token '(' to parse elif statement condition.")	  
 	local cond = parse_expr(0, true)
 	expect_tk_of_value(')', "Expected misc token ')' to close elif statement condition.")
 
-	local block = parse_block()
+	local block = parse_block(scope)
 	return {type = PARSE_TYPES.ELIF, cond = cond, block = block}	
 end
 
-local function parse_if()
+-- scope may be 'fn_block', which in that case it allows for return statements in here
+local function parse_if(scope)
 	expect_tk_of_value('(', "Expected misc token '(' to parse if statement condition.")
 	local cond = parse_expr(0, true)
 	expect_tk_of_value(')', "Expected misc token ')' to close if statement condition.")
 
-	local block = parse_block()	
+	local block = parse_block(scope)
 	local elif_statements = {}
 	local else_block = nil
 
@@ -277,10 +358,10 @@ local function parse_if()
 		local tk = next_tk()
 
 		if (tk.value == "elif") then
-			tb_insert(elif_statements, parse_elif())
+			tb_insert(elif_statements, parse_elif(scope))
 			
 		elseif (tk.value == "else") then
-			else_block = parse_block()
+			else_block = parse_block(scope)
 			expect_tk_of_value("end", "Expected keyword token 'end' to close else statement.")
 			break
 			
@@ -463,7 +544,7 @@ function parse_id(id_tk)
 		tk_index = tk_index - 1
 		local index_path = form_index_path()
 
-		expect_tk_of_value('=', "Expected misc token '=' for assigning value to index path.")
+		expect_tk_of_value('=', "Expected misc token '=' for assigning value for index path.")
 		return {type = PARSE_TYPES.INDEX_PATH_ASSIGN, id_name = id_tk.value, index_path = index_path, value = parse_expr()}
 	end
 
@@ -471,34 +552,50 @@ function parse_id(id_tk)
 	  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column, id_tk.value))
 end
 
-function parse_statement()
+local function parse_ret()
+	local tk = peek_tk()
+	local value = nil
+
+	if (tk.type ~= TK_TYPES.KEYWORD and tk.value ~= "EOF") then
+		value = parse_assign_value()
+	end
+
+	return {type = PARSE_TYPES.RET, value = value}
+end
+
+function parse_statement(scope)
 	local tk = next_tk()
 	
 	if (tk.value == "var") then
 		return parse_var()
 		
 	elseif (tk.value == "if") then
-		return parse_if()
+		return parse_if(scope)
 		
 	elseif (tk.value == "fn") then
 		return parse_fn()	
 		
 	elseif (tk.type == TK_TYPES.ID) then
 		return parse_id(tk)
+		
+	elseif (tk.value == "ret") then
+		assert(scope == SCOPES.FN_BLOCK,
+		  fmt("Expected return statement at line %d, column %d to be inside function block.", tk.src_line, tk.src_column))
+		  
+		return parse_ret(tk)
 	else
 		-- allow for this unmatched token to be read by whatever called this fn (eg. if it's "end", "for", etc)
 		tk_index = tk_index - 1
 	end
 end
 
--- should i just remove this?
--- edit: NAH
-function parse_block()
+function parse_block(scope)
+	print(scope)
 	local block = {}
 	local statement;
 	
 	repeat
-		statement = parse_statement()
+		statement = parse_statement(scope)
 		if (not statement) then break end
 		  
 		tb_insert(block, statement)
@@ -525,14 +622,21 @@ local function lex_src_text(src_file)
 	local MISC = {['('] = true, [')'] = true, ['.'] = true, [','] = true, ['['] = true,
 	  [']'] = true, ['{'] = true, ['}'] = true}
 	
-	local KEYWORDS = {["var"] = true, ["fn"] = true, ["if"] = true, ["else"] = true,
-	  ["elif"] = true, ["end"] = true, [""] = true, ["if"] = true, ["if"] = true,
+	local KEYWORDS = {["var"] = true, ["fn"] = true, ["if"] = true, ["elif"] = true,
+	  ["else"] = true, ["end"] = true, ["ret"] = true, ["skip"] = true, ["for"] = true,
+	  ["while"] = true, ["do"] = true,
 	  ["true"] = true, ["false"] = true, ["null"] = true}
 
 	local current_line = src_file:read("*line")
 	local char_index = 1
 	local line_count = 1
 
+	local function next_line()
+		current_line = src_file:read("*line")
+		char_index = 1
+		line_count = line_count + 1
+	end
+	
 	local function lex_num(has_decimal_point)
 		local SRC_COLUMN = char_index
 
@@ -540,7 +644,7 @@ local function lex_src_text(src_file)
 			char_index = char_index + 1
 			local char = str_sub(current_line, char_index, char_index)
 			
-			if (not string.match(char, '%d')) then
+			if (not str_match(char, '%d')) then
 				if (char == '.') then
 					assert(not has_decimal_point, "Unexpected extra decimal point for number")
 					has_decimal_point = true
@@ -556,9 +660,10 @@ local function lex_src_text(src_file)
 		local SRC_COLUMN = char_index
 		local SRC_LINE = line_count
 		local str = '"'
+
+		char_index = char_index + 1
 		
 		while (true) do
-			char_index = char_index + 1
 			local char = str_sub(current_line, char_index, char_index)
 			str = str.. char
 			
@@ -572,13 +677,14 @@ local function lex_src_text(src_file)
 
 			if (#current_line == 0 or char_index == #current_line + 1) then
 				str = str.. '\n'
-				current_line = src_file:read("*line")
-				char_index = 0
-				line_count = line_count + 1
+				next_line()
+				assert(current_line, fmt("Unclosed string literal beginning at line %d, column %d", SRC_LINE, SRC_COLUMN))
+			else
+				char_index = char_index + 1
 			end
 
 --			print(line_count, char_index, #current_line, char)
-			assert(current_line, fmt("Unclosed string literal beginning at line %d, column %d", SRC_LINE, SRC_COLUMN))
+--			char_index = char_index + 1
 		end
 	end
 
@@ -589,7 +695,7 @@ local function lex_src_text(src_file)
 			char_index = char_index + 1
 			local char = str_sub(current_line, char_index, char_index)
 
-			if (not string.match(char, "[%a%d_]")) then
+			if (not str_match(char, "[%a%d_]")) then
 				local value = str_sub(current_line, SRC_COLUMN, char_index - 1)
 				local token_type = (KEYWORDS[value]) and TK_TYPES.KEYWORD or TK_TYPES.ID
 				
@@ -610,18 +716,66 @@ local function lex_src_text(src_file)
 
 		return {type = TK_TYPES.NUM_OP, value = num_op, src_line = line_count, src_column = SRC_COLUMN}
 	end
-	
-	while (true) do	
-		-- why can't lua have 'continue' statement?
-		if (#current_line == 0) then goto skip_current_line end
+
+	local function handle_comment()
+		local SRC_LINE = line_count
+		local SRC_COLUMN = char_index
+		
+		char_index = char_index + 1
+		local char = str_sub(current_line, char_index, char_index)
+
+		if (char == '/') then
+			-- entire line is excluded from lexing
+			char_index = #current_line + 1
 			
-		while (char_index ~= #current_line + 1) do
+		elseif (char == '*') then
+			char_index = char_index + 1
+			-- this is awful
+			
+			while (current_line) do				
+				while (char_index < #current_line + 1) do
+					local char = str_sub(current_line, char_index, char_index)
+
+					if (char == '*') then
+						char_index = char_index + 1
+						char = str_sub(current_line, char_index, char_index)
+
+						if (char == '/') then
+							char_index = char_index + 1
+							return
+						end
+					end
+					char_index = char_index + 1
+				end
+								
+				next_line()
+			end
+
+			error(fmt("Unclosed multi-line comment beginning at line %d, column %d. Expected '*/' to close said comment", SRC_LINE, SRC_COLUMN))
+		end
+	end
+
+	local function is_comment()
+		local char = str_sub(current_line, char_index + 1, char_index + 1)
+		return char == '/' or char == '*'
+	end
+
+	while (current_line) do	
+		-- why can't lua have 'continue' statement?
+		-- if (#current_line == 0) then goto skip_current_line end
+
+		-- NOTE: empty lines with no characters have a len of '0'			
+		while (char_index < #current_line + 1) do
 			local char = str_sub(current_line, char_index, char_index)
 			
-			if (string.match(char, '%s')) then
+			if (str_match(char, '%s')) then
 				char_index = char_index + 1
-				
-			elseif (string.match(char, '%d')) then
+
+			-- not my proudest code
+			elseif (str_match(char, '/') and is_comment()) then
+				handle_comment(char == '*')
+			
+			elseif (str_match(char, '%d')) then
 				local HAS_DECIMAL_POINT = false
 				tb_insert(tokens, lex_num(HAS_DECIMAL_POINT))
 
@@ -629,7 +783,7 @@ local function lex_src_text(src_file)
 			elseif (char == '"') then
 				tb_insert(tokens, lex_str())
 			
-			elseif (char == '_' or string.match(char, '%a')) then
+			elseif (char == '_' or str_match(char, '%a')) then
 				tb_insert(tokens, lex_id_or_keyword())
 				
 			elseif (MISC[char]) then
@@ -671,17 +825,11 @@ local function lex_src_text(src_file)
 			print(char_index, #current_line)
 		end
 
-		::skip_current_line::
-		current_line = src_file:read("*line")
-
-		if (not current_line) then
-			tb_insert(tokens, {type = TK_TYPES.MISC, value = "EOF", src_line = line_count, src_column = char_index})
-			break
-		end
-
-		char_index = 1
-		line_count = line_count + 1
+		next_line()
 	end
+	
+	-- 'linecount - 1' since 'current_line' is nil
+	tb_insert(tokens, {type = TK_TYPES.MISC, value = "EOF", src_line = line_count - 1, src_column = char_index})
 end
 
 return function(src_file)

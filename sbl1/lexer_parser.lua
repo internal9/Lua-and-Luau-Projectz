@@ -58,6 +58,7 @@ local PARSE_TYPES = {
 	ARRAY_INDEX = "array_index",
 	REASSIGN = "reassign",
 	RET = "ret",
+	SKIP = "skip",
 	IF = "if",
 	ELIF = "elif",
 	DECLARE = "declare",
@@ -556,11 +557,6 @@ function parse_ret()
 		value = parse_assign_value()
 	end
 
-	expect_tk_of_value("end", "Expected keyword token 'end' to close return statement")
-
-	-- allow this token to be read by an fn, loop, or if block, ik it sucks
-	tk_index = tk_index - 1
-
 	return {type = PARSE_TYPES.RET, value = value}
 end
 
@@ -611,15 +607,21 @@ function parse_statement(scope)
 end
 
 function parse_block(scope)
-	print(scope)
+	-- print(scope)
 	local block = {}
 	local statement;
 	
 	repeat
 		statement = parse_statement(scope)
 		if (not statement) then break end
-		  
+
 		tb_insert(block, statement)
+
+		-- no statements are allowed under a 'skip' or 'ret' statement
+		if (statement.type == PARSE_TYPES.RET or statement.type == PARSE_TYPES.SKIP) then
+			break
+		end
+		
 	until (peek_tk().value == "EOF")
 
 	return block
@@ -628,7 +630,7 @@ end
 local function parse_tokens()
 	local code_parse_tree = parse_block()
 	local tk = next_tk()
-
+	
 	-- if token 'EOF' not reached, it must mean that an invalid token caused 'parse_block' to stop
 	assert(tk.value == "EOF", fmt("Invalid %s token '%s' at line %d, column %d. Expected an identifier, 'var', 'fn', or 'if' token",
 	  tk.type, tk.value, tk.src_line, tk.src_column))
@@ -651,9 +653,13 @@ local function lex_src_text(src_file)
 	local current_line = src_file:read("*line")
 	local char_index = 1
 	local line_count = 1
+	local eof_src_column;
 
 	local function next_line()
 		current_line = src_file:read("*line")
+		-- yuck
+		if (not current_line) then eof_src_column = char_index end 
+
 		char_index = 1
 		line_count = line_count + 1
 	end
@@ -772,7 +778,7 @@ local function lex_src_text(src_file)
 				next_line()
 			end
 
-			error(fmt("Unclosed multi-line comment beginning at line %d, column %d. Expected '*/' to close said comment", SRC_LINE, SRC_COLUMN))
+			error(fmt("Unclosed multi-line comment beginning at line %d, column %d. Expected '*/' on any line together to close said comment", SRC_LINE, SRC_COLUMN))
 		end
 	end
 
@@ -781,6 +787,7 @@ local function lex_src_text(src_file)
 		return char == '/' or char == '*'
 	end
 
+	-- yeah i'm literally just gonna rewrite this with if statements instead lol
 	while (current_line) do	
 		-- why can't lua have 'continue' statement?
 		-- if (#current_line == 0) then goto skip_current_line end
@@ -848,9 +855,9 @@ local function lex_src_text(src_file)
 
 		next_line()
 	end
-	
+
 	-- 'linecount - 1' since 'current_line' is nil
-	tb_insert(tokens, {type = TK_TYPES.MISC, value = "EOF", src_line = line_count - 1, src_column = char_index})
+	tb_insert(tokens, {type = TK_TYPES.MISC, value = "EOF", src_line = line_count - 1, src_column = eof_src_column})
 end
 
 return function(src_file)

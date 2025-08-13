@@ -7,6 +7,10 @@
 		(eg. struct a = {}, "a[2]" would be invalid and error)
 
 		Should I replace 'value' in all of the parse_types with more descriptive names?
+
+		How should I implement 'skip' statements?
+		EDIT: During running code, when I come across a loop statement, I will save it's index in the parse tree
+		which potential said 'skip' statement may use
 ]]
 
 --[=[
@@ -79,7 +83,7 @@ local OP_PRECS = {
 local NUM_UNA_PREC = 5
 local BOOL_UNA_PREC = 5
 
--- yuk
+-- yuk, marked for deleetiin
 --[[
 local SCOPES = {
 	MAIN_BLOCK = {
@@ -211,7 +215,6 @@ end
 -- would probably be helpful to note that it checks if next tk even exists at all
 local function is_next_prec_higher(prec_limit)
 	local tk = peek_tk()
-
 	return (tk.type == TK_TYPES.NUM_OP or tk.type == TK_TYPES.BOOL_OP) and (OP_PRECS[tk.value] > prec_limit) or false
 end
 
@@ -230,11 +233,7 @@ function parse_expr(prec_limit)
 		local prec = OP_PRECS[op_tk.value]
 		local right =  parse_expr(prec)
 		
-		if (op_tk.type == TK_TYPES.BOOL_OP) then
-			left = {type = PARSE_TYPES.BIN_EXPR, left = left, op = op_tk.value, right = right}
-		else
-			left = {type = PARSE_TYPES.BIN_EXPR, left = left, op = op_tk.value, right = right}
-		end
+		left = {type = PARSE_TYPES.BIN_EXPR, left = left, op = op_tk.value, right = right}
 	end
 
 	return left
@@ -435,16 +434,14 @@ local function parse_var()
 end
 
 function parse_struct()
-	local elements = {}
-
 	-- surely there is a better way to do this entire thing lol?
 	if (peek_tk().value == '}') then
 		tk_index = tk_index + 1
-
-		-- huh gotos are kinda useful
-		goto skip_parse
+		return {type = PARSE_TYPES.STRUCT, elements = {}}
 	end
-	
+
+	local elements = {}
+
 	while (true) do
 		local key_tk = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token for key of struct.")
 		
@@ -464,7 +461,6 @@ function parse_struct()
 		  tk.type, tk.value, tk.src_line, tk.src_column))
 	end
 
-	::skip_parse::
 	return {type = PARSE_TYPES.STRUCT, elements = elements}
 end
 
@@ -552,7 +548,7 @@ function parse_id(id_tk)
 	  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column, id_tk.value))
 end
 
-local function parse_ret()
+function parse_ret()
 	local tk = peek_tk()
 	local value = nil
 
@@ -560,9 +556,25 @@ local function parse_ret()
 		value = parse_assign_value()
 	end
 
+	expect_tk_of_value("end", "Expected keyword token 'end' to close return statement")
+
+	-- allow this token to be read by an fn, loop, or if block, ik it sucks
+	tk_index = tk_index - 1
+
 	return {type = PARSE_TYPES.RET, value = value}
 end
 
+function parse_while(scope)
+	expect_tk_of_value('(', "Expected misc token '(' to parse while statement condition.")
+	local cond = parse_expr(0, true)
+	expect_tk_of_value(')', "Expected misc token ')' to close while statement condition.")
+
+	local block = parse_block(SCOPES.LOOP_BLOCK)
+	expect_tk_of_value("end", "Expected keyword token 'end' to close while statement block.")
+	return {type = PARSE_TYPES.WHILE, cond = cond, block = block}
+end
+
+-- scope may be 'nil'
 function parse_statement(scope)
 	local tk = next_tk()
 	
@@ -580,9 +592,18 @@ function parse_statement(scope)
 		
 	elseif (tk.value == "ret") then
 		assert(scope == SCOPES.FN_BLOCK,
-		  fmt("Expected return statement at line %d, column %d to be inside function block.", tk.src_line, tk.src_column))
-		  
+		  fmt("Expected return statement at line %d, column %d to be inside function block.", tk.src_line, tk.src_column))  
 		return parse_ret(tk)
+	
+	elseif(tk.value == "while") then
+		return parse_while(scope)
+		
+	elseif (tk.value == "skip") then
+		assert(scope == SCOPES.LOOP_BLOCK,
+		  fmt("Expected skip statement at line %d, column %d to be inside loop block.", tk.src_line, tk.src_column))  
+
+		-- ya idrk what to do here
+		return {type = PARSE_TYPES.SKIP}
 	else
 		-- allow for this unmatched token to be read by whatever called this fn (eg. if it's "end", "for", etc)
 		tk_index = tk_index - 1

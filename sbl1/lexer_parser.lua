@@ -44,7 +44,6 @@ local TK_TYPES = {
 	NUM_OP = "number operator",
 	BOOL_OP = "boolean operator",
 	COMP_NUM_OP = "compound number operator",
-	BOOL_OP = "boolean operator",
 	MISC = "misc",
 }
 
@@ -61,6 +60,9 @@ local PARSE_TYPES = {
 	REASSIGN = "reassign",
 	RET = "ret",
 	SKIP = "skip",
+	WHILE = "while",
+	FOR = "for",
+	DO_WHILE = "do_while",
 	IF = "if",
 	ELIF = "elif",
 	DECLARE = "declare",
@@ -77,14 +79,15 @@ local PARSE_TYPES = {
 ]]
 local OP_PRECS = {
 	["||"] = 1, ["&&"] = 1,
-	["=="] = 2,
-	['+'] = 3, ['-'] = 3,
-	['*'] = 4, ['/'] = 4,
+	["=="] = 2, ["!="] = 2,
+	["<="] = 3, [">="] = 3, ['<'] = 3, ['>'] = 3,
+	['+'] = 4, ['-'] = 4,
+	['*'] = 5, ['/'] = 5,
 }
 
 -- will change if '^' is added
-local NUM_UNA_PREC = 5
-local BOOL_UNA_PREC = 5
+local NUM_UNA_PREC = 6
+local BOOL_UNA_PREC = 6
 
 -- yuk, marked for deleetiin
 --[[
@@ -136,6 +139,7 @@ local SCOPES = {
 }
 ]]
 
+-- useful for checking if 'ret' and 'skip' statements are in, or nested in their required blocks
 local SCOPES = {
 	FN = "fn",
 	LOOP = "loop",
@@ -218,6 +222,7 @@ end
 -- would probably be helpful to note that it checks if next tk even exists at all
 local function is_next_prec_higher(prec_limit)
 	local tk = peek_tk()
+	print("PREC TK: ", tk.value)
 	return (tk.type == TK_TYPES.NUM_OP or tk.type == TK_TYPES.BOOL_OP) and (OP_PRECS[tk.value] > prec_limit) or false
 end
 
@@ -562,19 +567,47 @@ function parse_ret()
 	return {type = PARSE_TYPES.RET, value = value}
 end
 
-function parse_while(scope)
+local function get_loop_scope(scope)
 	if (scope == SCOPES.FN) then
-		scope = SCOPES.LOOP_IN_FN
-	elseif (scope ~= SCOPES.LOOP_IN_FN) then
-		scope = SCOPES.LOOP
+		return SCOPES.LOOP_IN_FN	
+	elseif (scope == SCOPES.LOOP_IN_FN) then
+		return scope
 	end
+	return SCOPES.LOOP
+end
+
+-- scope refers to what scope the statement is in
+function parse_for(scope)
+	scope = get_loop_scope(scope)
+
+	-- awful error messags
+	expect_tk_of_value('(', "Expected misc token '(' to parse for loop statement expressions.")
 	
-	expect_tk_of_value('(', "Expected misc token '(' to parse while statement condition.")
-	local cond = parse_expr(0, true)
-	expect_tk_of_value(')', "Expected misc token ')' to close while statement condition.")
+	local index_tk = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be for loop statement index.")
+	expect_tk_of_value(',', "Expected misc token ',' prior to parsing for loop statement index limit expression.")
+
+	-- expression's result will be typechecked for a number
+	local limit = parse_expr()
+	expect_tk_of_value(',', "Expected misc token ',' prior to parsing for loop statement index increment expression.")
+
+	local increment = parse_expr()
+	expect_tk_of_value(')', "Expected misc token ')' to close for loop statement expressions.")
 
 	local block = parse_block(scope)
-	expect_tk_of_value("end", "Expected keyword token 'end' to close while statement block.")
+	expect_tk_of_value("end", "Expected keyword token 'end' to close for loop statement block.")
+
+	return {type = PARSE_TYPES.FOR, limit = limit, increment = increment, block = block}
+end
+
+function parse_while(scope)
+	scope = get_loop_scope(scope)
+	
+	expect_tk_of_value('(', "Expected misc token '(' to parse while loop statement condition.")
+	local cond = parse_expr(0, true)
+	expect_tk_of_value(')', "Expected misc token ')' to close while loop statement condition.")
+
+	local block = parse_block(scope)
+	expect_tk_of_value("end", "Expected keyword token 'end' to close while loop statement block.")
 	return {type = PARSE_TYPES.WHILE, cond = cond, block = block}
 end
 
@@ -601,8 +634,11 @@ function parse_statement(scope)
 		  fmt("Expected return statement at line %d, column %d to be inside function block or in nested loops inside said function block.", tk.src_line, tk.src_column))  
 		return parse_ret(tk)
 	
-	elseif(tk.value == "while") then
+	elseif (tk.value == "while") then
 		return parse_while(scope)
+		
+	elseif (tk.value == "for") then
+		return parse_for(scope)
 		
 	elseif (tk.value == "skip") then
 		print("SKIP SCOPE: ", scope)
@@ -653,6 +689,7 @@ local function lex_src_text(src_file)
 	-- i hate it here, why?
 	
 	local NUM_OPS = {['+'] = true, ['-'] = true, ['*'] = true, ['/'] = true}	
+	local BOOL_OPS = {['!'] = true, ['<'] = true, ['>'] = true}
 	local MISC = {['('] = true, [')'] = true, ['.'] = true, [','] = true, ['['] = true,
 	  [']'] = true, ['{'] = true, ['}'] = true}
 	
@@ -755,6 +792,19 @@ local function lex_src_text(src_file)
 		return {type = TK_TYPES.NUM_OP, value = num_op, src_line = line_count, src_column = SRC_COLUMN}
 	end
 
+	local function lex_bool_op(bool_op)
+		local SRC_COLUMN = char_index
+		char_index = char_index + 1
+		local next_char = str_sub(current_line, char_index, char_index)
+		
+		if (next_char == '=') then
+			bool_op = bool_op.. '='
+			char_index = char_index + 1
+		end
+
+		return {type = TK_TYPES.BOOL_OP, value = bool_op, src_line = line_count, src_column = SRC_COLUMN}
+	end
+
 	local function handle_comment()
 		local SRC_LINE = line_count
 		local SRC_COLUMN = char_index
@@ -832,10 +882,8 @@ local function lex_src_text(src_file)
 			elseif (NUM_OPS[char]) then
 				tb_insert(tokens, lex_num_op(char))
 
-			elseif (char == '!') then
-				tb_insert(tokens, {type = TK_TYPES.BOOL_OP, value = '!', src_line = line_count, src_column = char_index})
-				char_index = char_index + 1
-				-- yuck,wish i had an elegant solution instead of these if statements			
+			elseif (BOOL_OPS[char]) then
+				tb_insert(tokens, lex_bool_op(char))
 					
 			elseif (char == '=') then
 				local SRC_COLUMN = char_index

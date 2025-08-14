@@ -11,6 +11,8 @@
 		How should I implement 'skip' statements?
 		EDIT: During running code, when I come across a loop statement, I will save it's index in the parse tree
 		which potential said 'skip' statement may use
+
+		Should I 'optimize' multi-line comments? Making it only end if it finds characters '*/' at beginning or end of line?
 ]]
 
 --[=[
@@ -135,9 +137,9 @@ local SCOPES = {
 ]]
 
 local SCOPES = {
-	FN_BLOCK = "fn_block",
-	LOOP_BLOCK = "loop_block",
-	LOOP_BLOCK_IN_FN = "loop_block_in_fn",
+	FN = "fn",
+	LOOP = "loop",
+	LOOP_IN_FN = "loop_in_fn",
 }
 		
 local tokens = {}
@@ -267,7 +269,7 @@ function parse_fn()
 			has_variadic_params = true
 			break
 		end
-		
+
 		if (not expect_param) then
 			if (tk.value == ')') then 
 				tk_index = tk_index + 1
@@ -297,7 +299,7 @@ function parse_fn()
 		expect_arg = true
 	end
 
-	local block = parse_block(SCOPES.FN_BLOCK)
+	local block = parse_block(SCOPES.FN)
 	expect_tk_of_value("end", fmt("Expected keyword token 'end' to close function '%s'", id_tk.value))
 
 	return {type = PARSE_TYPES.FN, id_name = id_tk.value, params = params,
@@ -561,11 +563,17 @@ function parse_ret()
 end
 
 function parse_while(scope)
+	if (scope == SCOPES.FN) then
+		scope = SCOPES.LOOP_IN_FN
+	elseif (scope ~= SCOPES.LOOP_IN_FN) then
+		scope = SCOPES.LOOP
+	end
+	
 	expect_tk_of_value('(', "Expected misc token '(' to parse while statement condition.")
 	local cond = parse_expr(0, true)
 	expect_tk_of_value(')', "Expected misc token ')' to close while statement condition.")
 
-	local block = parse_block(SCOPES.LOOP_BLOCK)
+	local block = parse_block(scope)
 	expect_tk_of_value("end", "Expected keyword token 'end' to close while statement block.")
 	return {type = PARSE_TYPES.WHILE, cond = cond, block = block}
 end
@@ -581,21 +589,24 @@ function parse_statement(scope)
 		return parse_if(scope)
 		
 	elseif (tk.value == "fn") then
-		return parse_fn()	
+		return parse_fn(scope)
 		
 	elseif (tk.type == TK_TYPES.ID) then
 		return parse_id(tk)
 		
 	elseif (tk.value == "ret") then
-		assert(scope == SCOPES.FN_BLOCK,
-		  fmt("Expected return statement at line %d, column %d to be inside function block.", tk.src_line, tk.src_column))  
+		print("RET SCOPE: ", scope)
+
+		assert(scope == SCOPES.FN or scope == SCOPES.LOOP_IN_FN,
+		  fmt("Expected return statement at line %d, column %d to be inside function block or in nested loops inside said function block.", tk.src_line, tk.src_column))  
 		return parse_ret(tk)
 	
 	elseif(tk.value == "while") then
 		return parse_while(scope)
 		
 	elseif (tk.value == "skip") then
-		assert(scope == SCOPES.LOOP_BLOCK,
+		print("SKIP SCOPE: ", scope)
+		assert(scope == SCOPES.LOOP or scope == SCOPES.LOOP_IN_FN,
 		  fmt("Expected skip statement at line %d, column %d to be inside loop block.", tk.src_line, tk.src_column))  
 
 		-- ya idrk what to do here

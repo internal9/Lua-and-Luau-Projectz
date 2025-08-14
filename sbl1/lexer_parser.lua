@@ -3,6 +3,8 @@
 		GNU Nano displays a tab as multiple columns, while lua treats a tab as just one character
 		numbers starting with period shall not be supported for now (eg. ".23")
 	FUTURE:
+		Pls standardize the debugging messages
+		
 		I should probably add a 'debug env' to allow for type checking during parsing
 		(eg. struct a = {}, "a[2]" would be invalid and error)
 
@@ -62,8 +64,9 @@ local PARSE_TYPES = {
 	SKIP = "skip",
 	WHILE = "while",
 	FOR = "for",
-	DO_WHILE = "do_while",
+	REP = "rep",
 	IF = "if",
+	CASES = "cases",
 	ELIF = "elif",
 	DECLARE = "declare",
 	BLOCK = "block",
@@ -88,56 +91,6 @@ local OP_PRECS = {
 -- will change if '^' is added
 local NUM_UNA_PREC = 6
 local BOOL_UNA_PREC = 6
-
--- yuk, marked for deleetiin
---[[
-local SCOPES = {
-	MAIN_BLOCK = {
-		[PARSE_TYPES.FN] = true,
-		[PARSE_TYPES.FN_CALL] = true,
-		[PARSE_TYPES.ARRAY] = true,
-		[PARSE_TYPES.STRUCT] = true,
-		[PARSE_TYPES.INDEX_PATH_ASSIGN] = true,
-		[PARSE_TYPES.INDEX_PATH] = true,
-		[PARSE_TYPES.STRUCT_INDEX] = true,
-		[PARSE_TYPES.ARRAY_INDEX] = true,
-		[PARSE_TYPES.REASSIGN] = true,
-		[PARSE_TYPES.IF] = true,
-		[PARSE_TYPES.ELIF] = true,
-		[PARSE_TYPES.DECLARE] = true
-	},
-	FN_BLOCK = {
-		[PARSE_TYPES.FN] = true,
-		[PARSE_TYPES.FN_CALL] = true,
-		[PARSE_TYPES.ARRAY] = true,
-		[PARSE_TYPES.STRUCT] = true,
-		[PARSE_TYPES.INDEX_PATH_ASSIGN] = true,
-		[PARSE_TYPES.INDEX_PATH] = true,
-		[PARSE_TYPES.STRUCT_INDEX] = true,
-		[PARSE_TYPES.ARRAY_INDEX] = true,
-		[PARSE_TYPES.REASSIGN] = true,
-		[PARSE_TYPES.IF] = true,
-		[PARSE_TYPES.ELIF] = true,
-		[PARSE_TYPES.DECLARE] = true,
-		[PARSE_TYPES.RET] = true
-	},
-	LOOP = {
-		[PARSE_TYPES.FN] = true,
-		[PARSE_TYPES.FN_CALL] = true,
-		[PARSE_TYPES.ARRAY] = true,
-		[PARSE_TYPES.STRUCT] = true,
-		[PARSE_TYPES.INDEX_PATH_ASSIGN] = true,
-		[PARSE_TYPES.INDEX_PATH] = true,
-		[PARSE_TYPES.STRUCT_INDEX] = true,
-		[PARSE_TYPES.ARRAY_INDEX] = true,
-		[PARSE_TYPES.REASSIGN] = true,
-		[PARSE_TYPES.IF] = true,
-		[PARSE_TYPES.ELIF] = true,
-		[PARSE_TYPES.DECLARE] = true,
-		[PARSE_TYPES.SKIP] = true
-	}
-}
-]]
 
 -- useful for checking if 'ret' and 'skip' statements are in, or nested in their required blocks
 local SCOPES = {
@@ -383,6 +336,58 @@ local function parse_if(scope)
 	return {type = PARSE_TYPES.IF, cond = cond, block = block, elif_statements = elif_statements, else_block = else_block}
 end
 
+local function parse_case(scope)
+	local case_exprs = {}
+	local block;
+	tb_insert(case_exprs, parse_expr())
+
+	while (peek_tk().value == ',') do
+		tk_index = tk_index + 1
+		tb_insert(case_exprs, parse_expr())
+	end
+
+	expect_tk_of_value(':', "Expected misc token ':' to parse case block")
+	local IS_IN_CASES = true
+	return {case_exprs = case_exprs, block = parse_block(scope, IS_IN_CASES)}
+end
+
+function parse_cases(scope)
+	expect_tk_of_value('(', "Expected misc token '(' prior to parsing cases statement argument expression")
+	local value = parse_expr()
+	
+	expect_tk_of_value(')', "Expected misc token ')' to close cases statement argument expression")
+	local cases = {}
+	local none_block = nil
+
+	-- awful code, not the best
+	-- duplicate cases will be checked at run-time, since these are expression
+	while (true) do
+		tb_insert(cases, parse_case(scope))
+
+		local tk = peek_tk()
+
+		if (tk.value == "none") then
+			tk_index = tk_index + 1
+			expect_tk_of_value(':', "Expected misc token ':' to parse case 'none' block")
+			none_case_block = parse_block(scope)
+			
+			expect_tk_of_value("end", "Expected statement(s), or keyword token 'end' to close cases statement")
+			break
+		end
+
+		if (tk.value == "end") then
+			tk_index = tk_index + 1
+			break
+		end
+
+		assert(tk.value ~= "EOF",
+		  fmt("Invalid misc token 'EOF' at line %d, column %d. Expected cases(s), or keyword token 'end' to close cases statement",
+		  tk.src_line, tk.src_column))
+	end
+
+	return {type = PARSE_TYPES.CASES, value = value, cases = cases, none_case_block = none_case_block}
+end
+
 function form_index_path()
 	local index_path = {}
 	
@@ -427,7 +432,7 @@ local function parse_var()
 	end
 
 	tk_index = tk_index + 1
-	return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_assign_value()}
+	return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_value()}
 
 	--[[
 	--												 unary '-'
@@ -459,7 +464,7 @@ function parse_struct()
 		assert(not elements[key_tk.value], fmt("Duplicate element '%s' in struct at line %d, column %d.",
 		  key_tk.value, key_tk.src_line, key_tk.src_column))
 		  
-		elements[key_tk.value] = parse_assign_value()
+		elements[key_tk.value] = parse_value()
 		
 		local tk = next_tk()
 
@@ -483,7 +488,7 @@ function parse_array()
 
 	while (true) do	
 		-- NOTE: index starts at 1 in lua
-		tb_insert(elements, parse_assign_value())
+		tb_insert(elements, parse_value())
 		local tk = next_tk()
 
 		if (tk.value == ']') then break end
@@ -496,7 +501,8 @@ function parse_array()
 	return {type = PARSE_TYPES.ARRAY, elements = elements}
 end
 
-function parse_assign_value()
+-- parsing a value that is usually on the right side of a declaration or initialization
+function parse_value()
 	local tk = next_tk()
 	
 	if (tk.value == '{') then
@@ -531,9 +537,9 @@ end
 -- parse id when it's a statement (eg. a = 2, arr[0] = 5)
 function parse_id(id_tk)
 	local second_tk = next_tk()
-
+	
 	if (second_tk.value == '=') then
-		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = parse_assign_value()}
+		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = parse_value()}
 		
 	elseif (second_tk.type == TK_TYPES.COMP_NUM_OP) then
 		local op =  string.sub(second_tk.value, 1, 1)
@@ -561,12 +567,13 @@ function parse_ret()
 	local value = nil
 
 	if (tk.type ~= TK_TYPES.KEYWORD and tk.value ~= "EOF") then
-		value = parse_assign_value()
+		value = parse_value()
 	end
 
 	return {type = PARSE_TYPES.RET, value = value}
 end
 
+-- allows ret statements nested inside loops that are inside functions
 local function get_loop_scope(scope)
 	if (scope == SCOPES.FN) then
 		return SCOPES.LOOP_IN_FN	
@@ -581,9 +588,12 @@ function parse_for(scope)
 	scope = get_loop_scope(scope)
 
 	-- awful error messags
-	expect_tk_of_value('(', "Expected misc token '(' to parse for loop statement expressions.")
+	expect_tk_of_value('(', "Expected misc token '(' to parse for loop statement arguments.")
+	local index_id = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be for loop statement index identifier.")
 	
-	local index_tk = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be for loop statement index.")
+	expect_tk_of_value(',', "Expected misc token ',' prior to parsing for loop statement index start expression.")
+	local start = parse_expr()
+
 	expect_tk_of_value(',', "Expected misc token ',' prior to parsing for loop statement index limit expression.")
 
 	-- expression's result will be typechecked for a number
@@ -596,13 +606,35 @@ function parse_for(scope)
 	local block = parse_block(scope)
 	expect_tk_of_value("end", "Expected keyword token 'end' to close for loop statement block.")
 
-	return {type = PARSE_TYPES.FOR, limit = limit, increment = increment, block = block}
+	return {type = PARSE_TYPES.FOR, index_id = index_id.value, limit = limit, increment = increment, block = block}
+end
+
+function parse_iter(scope)
+	scope = get_loop_scope(scope)
+
+	expect_tk_of_value('(', "Expected misc token '(' to parse iter loop statement arguments.")
+
+	-- will be typechecked for a struct or array	
+	local value = parse_value()
+	expect_tk_of_value(',', "Expected misc token ',' prior to parsing iter loop statement index identifier.")
+
+	local index_id = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be iter loop statement index identifier.")
+	expect_tk_of_value(',', "Expected misc token ',' prior to parsing iter loop statement element identifier.")
+	
+	local element_id = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be iter loop statement element identifier.")
+
+	expect_tk_of_value(')', "Expected misc token ')' to close iter loop statement arguments.")
+
+	local block = parse_block(scope)
+	expect_tk_of_value("end", "Expected keyword token 'end' to close iter loop statement block.")
+
+	return {type = PARSE_TYPES.ITER, value = value, index_id = index_id.value, element_id = element_id.value, block = block}
 end
 
 function parse_while(scope)
 	scope = get_loop_scope(scope)
 	
-	expect_tk_of_value('(', "Expected misc token '(' to parse while loop statement condition.")
+	expect_tk_of_value('(', "Expected misc token '(' prior to parsing while loop statement condition.")
 	local cond = parse_expr(0, true)
 	expect_tk_of_value(')', "Expected misc token ')' to close while loop statement condition.")
 
@@ -611,8 +643,22 @@ function parse_while(scope)
 	return {type = PARSE_TYPES.WHILE, cond = cond, block = block}
 end
 
+function parse_rep(scope)
+	scope = get_loop_scope(scope)
+	local block = parse_block(scope)
+	
+	expect_tk_of_value("until", "Expected keyword token 'until' to prior to parsing repeat loop condition.")
+
+	expect_tk_of_value('(', "Expected misc token '(' to parse repeat loop statement condition.")
+	local cond = parse_expr(0, true)
+	expect_tk_of_value(')', "Expected misc token ')' to close repeat loop statement condition.")
+	
+	return {type = PARSE_TYPES.REP, cond = cond, block = block}
+end
+
 -- scope may be 'nil'
-function parse_statement(scope)
+-- 'is_in_cases', not the most elegant solution, but it prevents an identifier from erroring if the tk after it is a ':', thus it is a case
+function parse_statement(scope, is_in_cases)
 	local tk = next_tk()
 	
 	if (tk.value == "var") then
@@ -621,15 +667,23 @@ function parse_statement(scope)
 	elseif (tk.value == "if") then
 		return parse_if(scope)
 		
+	elseif (tk.value == "cases") then
+		return parse_cases(scope)
+		
 	elseif (tk.value == "fn") then
 		return parse_fn(scope)
 		
 	elseif (tk.type == TK_TYPES.ID) then
+		local second_tk = peek_tk()
+		
+		if (is_in_cases and (second_tk.value == ':' or second_tk.value == ',')) then
+			-- allow identifier to be read by 'parse_case'
+			tk_index = tk_index - 1
+			return
+		end
 		return parse_id(tk)
 		
 	elseif (tk.value == "ret") then
-		print("RET SCOPE: ", scope)
-
 		assert(scope == SCOPES.FN or scope == SCOPES.LOOP_IN_FN,
 		  fmt("Expected return statement at line %d, column %d to be inside function block or in nested loops inside said function block.", tk.src_line, tk.src_column))  
 		return parse_ret(tk)
@@ -637,9 +691,15 @@ function parse_statement(scope)
 	elseif (tk.value == "while") then
 		return parse_while(scope)
 		
+	elseif (tk.value == "rep") then
+		return parse_rep(scope)
+			
 	elseif (tk.value == "for") then
 		return parse_for(scope)
 		
+	elseif (tk.value == "iter") then
+		return parse_iter(scope)
+			
 	elseif (tk.value == "skip") then
 		print("SKIP SCOPE: ", scope)
 		assert(scope == SCOPES.LOOP or scope == SCOPES.LOOP_IN_FN,
@@ -653,13 +713,13 @@ function parse_statement(scope)
 	end
 end
 
-function parse_block(scope)
+function parse_block(scope, is_in_cases)
 	-- print(scope)
 	local block = {}
 	local statement;
 	
 	repeat
-		statement = parse_statement(scope)
+		statement = parse_statement(scope, is_in_cases)
 		if (not statement) then break end
 
 		tb_insert(block, statement)
@@ -688,15 +748,16 @@ end
 local function lex_src_text(src_file)
 	-- i hate it here, why?
 	
-	local NUM_OPS = {['+'] = true, ['-'] = true, ['*'] = true, ['/'] = true}	
+	local NUM_OPS = {['+'] = true, ['-'] = true, ['*'] = true, ['/'] = true, ['%'] = true}
 	local BOOL_OPS = {['!'] = true, ['<'] = true, ['>'] = true}
 	local MISC = {['('] = true, [')'] = true, ['.'] = true, [','] = true, ['['] = true,
-	  [']'] = true, ['{'] = true, ['}'] = true}
+	  [']'] = true, ['{'] = true, ['}'] = true, [':'] = true}
 	
 	local KEYWORDS = {["var"] = true, ["fn"] = true, ["if"] = true, ["elif"] = true,
-	  ["else"] = true, ["end"] = true, ["ret"] = true, ["skip"] = true, ["for"] = true,
-	  ["while"] = true, ["do"] = true,
-	  ["true"] = true, ["false"] = true, ["null"] = true}
+	  ["else"] = true, ["end"] = true, ["ret"] = true, ["skip"] = true,
+	  ["for"] = true, ["while"] = true, ["iter"] = true, ["rep"] = true, ["until"] = true,
+	  ["true"] = true, ["false"] = true, ["null"] = true,
+	  ["cases"] = true, ["none"] = true}
 
 	local current_line = src_file:read("*line")
 	local char_index = 1

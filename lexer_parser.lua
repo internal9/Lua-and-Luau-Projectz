@@ -3,6 +3,8 @@
 		GNU Nano displays a tab as multiple columns, while lua treats a tab as just one character
 		numbers starting with period shall not be supported for now (eg. ".23")
 	FUTURE:
+		Pls standardize the debugging messages
+		
 		I should probably add a 'debug env' to allow for type checking during parsing
 		(eg. struct a = {}, "a[2]" would be invalid and error)
 
@@ -345,7 +347,8 @@ local function parse_case(scope)
 	end
 
 	expect_tk_of_value(':', "Expected misc token ':' to parse case block")
-	return {case_exprs = case_exprs, block = parse_block(scope)}
+	local IS_IN_CASES = true
+	return {case_exprs = case_exprs, block = parse_block(scope, IS_IN_CASES)}
 end
 
 function parse_cases(scope)
@@ -534,7 +537,7 @@ end
 -- parse id when it's a statement (eg. a = 2, arr[0] = 5)
 function parse_id(id_tk)
 	local second_tk = next_tk()
-
+	
 	if (second_tk.value == '=') then
 		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = parse_value()}
 		
@@ -654,7 +657,8 @@ function parse_rep(scope)
 end
 
 -- scope may be 'nil'
-function parse_statement(scope)
+-- 'is_in_cases', not the most elegant solution, but it prevents an identifier from erroring if the tk after it is a ':', thus it is a case
+function parse_statement(scope, is_in_cases)
 	local tk = next_tk()
 	
 	if (tk.value == "var") then
@@ -670,6 +674,13 @@ function parse_statement(scope)
 		return parse_fn(scope)
 		
 	elseif (tk.type == TK_TYPES.ID) then
+		local second_tk = peek_tk()
+		
+		if (is_in_cases and (second_tk.value == ':' or second_tk.value == ',')) then
+			-- allow identifier to be read by 'parse_case'
+			tk_index = tk_index - 1
+			return
+		end
 		return parse_id(tk)
 		
 	elseif (tk.value == "ret") then
@@ -702,13 +713,13 @@ function parse_statement(scope)
 	end
 end
 
-function parse_block(scope)
+function parse_block(scope, is_in_cases)
 	-- print(scope)
 	local block = {}
 	local statement;
 	
 	repeat
-		statement = parse_statement(scope)
+		statement = parse_statement(scope, is_in_cases)
 		if (not statement) then break end
 
 		tb_insert(block, statement)

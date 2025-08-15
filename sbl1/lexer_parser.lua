@@ -15,6 +15,7 @@
 		which potential said 'skip' statement may use
 
 		Should I 'optimize' multi-line comments? Making it only end if it finds characters '*/' at beginning or end of line?
+		I might just check if 'ret' is in function block by checking a call stack for any functions pushed
 ]]
 
 --[=[
@@ -133,36 +134,17 @@ local function expect_tk_of_value(value, fail_msg_detail)
 	return tk
 end
 
-local function is_tk_type(tk, ...)
-	for _, type in ipairs({...}) do
-		if (tk.type == type) then return true end
-	end
-	
-	return false
-end
-
-local function is_tk_type_or_value(tk, ...)
-	for _, type_or_value in ipairs({...}) do
-		if (tk.type == type_or_value or tk.value == type_or_value) then return true end
-	end
-	
-	return false
-end
-
-local function parse_tern_expr()
-
-end
-
 -- pratt parsing
 local function null_denot(tk)
-	if (is_tk_type_or_value(tk, TK_TYPES.NUM, TK_TYPES.STR, "true", "false", "null")) then
+	if (tk.type == TK_TYPES.NUM or tk.type == TK_TYPES.STR or
+	  tk.value == "true" or tk.value == "false" or tk.value == "null") then
 		return tk
 		
 	elseif (tk.value == '-') then	
 		return {type = PARSE_TYPES.UNA_EXPR, op = tk.value, right = parse_expr(NUM_UNA_PREC)}
 		
 	elseif (tk.value == '(') then
-		local expr = parse_expr(0, is_bool_expr)
+		local expr = parse_expr()
 		expect_tk_of_value(')', "Expected misc token ')' to finish sub-expression.")
 		return expr
 		
@@ -171,7 +153,7 @@ local function null_denot(tk)
 		return parse_id_value(tk)
 
 	elseif (tk.value == '!') then
-		return {type = PARSE_TYPES.UNA_EXPR, op = '!', right = parse_expr(BOOL_UNA_PREC, true)}
+		return {type = PARSE_TYPES.UNA_EXPR, op = '!', right = parse_expr(BOOL_UNA_PREC)}
 	end		
 	
 	error(fmt("Invalid %s token '%s' at line %d, column %d. Expected number, identifier, 'true', 'false', 'null', '-', or '(' token for parsing expression.",
@@ -188,17 +170,15 @@ end
 -- would probably be helpful to note that it checks if next tk even exists at all
 local function is_next_prec_higher(prec_limit)
 	local tk = peek_tk()
-	print("PREC TK: ", tk.value)
 	return (tk.type == TK_TYPES.NUM_OP or tk.type == TK_TYPES.BOOL_OP or tk.value == '?')
 	  and (OP_PRECS[tk.value] > prec_limit) or false
 end
 
 function parse_expr(prec_limit)
 	prec_limit = prec_limit or 0
-	is_bool_expr = (is_bool_expr ~= nil) and is_bool_expr or false
 	
 	local left_tk = next_tk()
-	local left = null_denot(left_tk, is_bool_expr)	
+	local left = null_denot(left_tk)
 
 	-- temp solution for condition.. maybe not?
 	while (is_next_prec_higher(prec_limit)) do
@@ -283,6 +263,7 @@ end
 function parse_fn_call(id_tk)
 	local args = {}
 	local expect_arg = false
+	local has_variadic_args = false
 	
 	while (true) do
 		local tk = peek_tk()
@@ -294,6 +275,20 @@ function parse_fn_call(id_tk)
 			end
 		end
 
+		if (tk.value == '.') then
+			tk_index = tk_index + 1
+
+			expect_tk_of_value('.', 
+			  fmt("Expected two misc tokens '.' to parse variadic arguments for function call '%s'", id_tk.value))
+			expect_tk_of_value('.', 
+			  fmt("Expected misc token '.' to parse variadic arguments for function call '%s'", id_tk.value))
+			expect_tk_of_value(')',
+			  fmt("Expected misc token ')' to close function call '%s'", id_tk.value))
+			  
+			has_variadic_args = true  
+			break
+		end
+		
 		local arg = parse_expr()
 		expect_arg = false
 		
@@ -302,17 +297,17 @@ function parse_fn_call(id_tk)
 
 		if (tk.value == ')') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in arguments, or misc token ')' to close call for function '%s'.",
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in arguments, or misc token ')' to close function call '%s'.",
 		  tk.type, tk.value, tk.src_line, tk.src_column, id_tk.value))
 		expect_arg = true
 	end
 
-	return {type = PARSE_TYPES.FN_CALL, id_name = id_tk.value, args = args}
+	return {type = PARSE_TYPES.FN_CALL, id_name = id_tk.value, args = args, has_variadic_args = has_variadic_args}
 end
 
 local function parse_elif(scope)
 	expect_tk_of_value('(', "Expected misc token '(' to parse elif statement condition.")	  
-	local cond = parse_expr(0, true)
+	local cond = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close elif statement condition.")
 
 	local block = parse_block(scope)
@@ -322,7 +317,7 @@ end
 -- scope may be 'fn_block', which in that case it allows for return statements in here
 local function parse_if(scope)
 	expect_tk_of_value('(', "Expected misc token '(' to parse if statement condition.")
-	local cond = parse_expr(0, true)
+	local cond = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close if statement condition.")
 
 	local block = parse_block(scope)
@@ -639,7 +634,7 @@ function parse_while(scope)
 	scope = get_loop_scope(scope)
 	
 	expect_tk_of_value('(', "Expected misc token '(' prior to parsing while loop statement condition.")
-	local cond = parse_expr(0, true)
+	local cond = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close while loop statement condition.")
 
 	local block = parse_block(scope)
@@ -654,7 +649,7 @@ function parse_rep(scope)
 	expect_tk_of_value("until", "Expected keyword token 'until' to prior to parsing repeat loop condition.")
 
 	expect_tk_of_value('(', "Expected misc token '(' to parse repeat loop statement condition.")
-	local cond = parse_expr(0, true)
+	local cond = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close repeat loop statement condition.")
 	
 	return {type = PARSE_TYPES.REP, cond = cond, block = block}
@@ -705,7 +700,6 @@ function parse_statement(scope, is_in_cases)
 		return parse_iter(scope)
 			
 	elseif (tk.value == "skip") then
-		print("SKIP SCOPE: ", scope)
 		assert(scope == SCOPES.LOOP or scope == SCOPES.LOOP_IN_FN,
 		  fmt("Expected skip statement at line %d, column %d to be inside loop block.", tk.src_line, tk.src_column))  
 

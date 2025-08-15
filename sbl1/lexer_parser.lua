@@ -72,6 +72,7 @@ local PARSE_TYPES = {
 	BLOCK = "block",
 	BIN_EXPR = "binary_expr",
 	UNA_EXPR = "unary_expr",
+	TERN_EXPR = "ternary_expr"
 }
 
 
@@ -86,11 +87,12 @@ local OP_PRECS = {
 	["<="] = 3, [">="] = 3, ['<'] = 3, ['>'] = 3,
 	['+'] = 4, ['-'] = 4,
 	['*'] = 5, ['/'] = 5,
+	['?'] = 6,
 }
 
 -- will change if '^' is added
-local NUM_UNA_PREC = 6
-local BOOL_UNA_PREC = 6
+local NUM_UNA_PREC = 7
+local BOOL_UNA_PREC = 7
 
 -- useful for checking if 'ret' and 'skip' statements are in, or nested in their required blocks
 local SCOPES = {
@@ -147,6 +149,10 @@ local function is_tk_type_or_value(tk, ...)
 	return false
 end
 
+local function parse_tern_expr()
+
+end
+
 -- pratt parsing
 local function null_denot(tk)
 	if (is_tk_type_or_value(tk, TK_TYPES.NUM, TK_TYPES.STR, "true", "false", "null")) then
@@ -172,29 +178,38 @@ local function null_denot(tk)
 	  tk.type, tk.value, tk.src_line, tk.src_column))
 end
 
+local function parse_tern_expr(left, op)
+	local true_val = parse_value()
+	expect_tk_of_value(':', "Expected misc token ':' to prior to parsing false value of ternary operator")
+	local false_val = parse_value()
+	return {type = PARSE_TYPES.TERN_EXPR, cond = left, false_val = false_val, true_val = true_val}
+end
+
 -- would probably be helpful to note that it checks if next tk even exists at all
 local function is_next_prec_higher(prec_limit)
 	local tk = peek_tk()
 	print("PREC TK: ", tk.value)
-	return (tk.type == TK_TYPES.NUM_OP or tk.type == TK_TYPES.BOOL_OP) and (OP_PRECS[tk.value] > prec_limit) or false
+	return (tk.type == TK_TYPES.NUM_OP or tk.type == TK_TYPES.BOOL_OP or tk.value == '?')
+	  and (OP_PRECS[tk.value] > prec_limit) or false
 end
 
 function parse_expr(prec_limit)
 	prec_limit = prec_limit or 0
 	is_bool_expr = (is_bool_expr ~= nil) and is_bool_expr or false
+	
 	local left_tk = next_tk()
-	print_pretty_tb(left_tk)
-
-	assert(left_tk, "Expected number, identifier, '-', or '(' token for parsing expression at..")
 	local left = null_denot(left_tk, is_bool_expr)	
 
 	-- temp solution for condition.. maybe not?
 	while (is_next_prec_higher(prec_limit)) do
 		local op_tk = next_tk()
 		local prec = OP_PRECS[op_tk.value]
-		local right =  parse_expr(prec)
-		
-		left = {type = PARSE_TYPES.BIN_EXPR, left = left, op = op_tk.value, right = right}
+
+		if (op_tk.value == '?') then
+			left = parse_tern_expr(left, op)
+		else
+			left = {type = PARSE_TYPES.BIN_EXPR, left = left, op = op_tk.value, right = parse_expr(prec)}
+		end
 	end
 
 	return left
@@ -287,7 +302,7 @@ function parse_fn_call(id_tk)
 
 		if (tk.value == ')') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in function call argument list or misc token ')' to close function call for function '%s'.",
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in arguments, or misc token ')' to close call for function '%s'.",
 		  tk.type, tk.value, tk.src_line, tk.src_column, id_tk.value))
 		expect_arg = true
 	end
@@ -328,7 +343,7 @@ local function parse_if(scope)
 		elseif (tk.value == "end") then
 			break
 		else
-			error(fmt("Invalid %s token '%s' at line %d, column %d. Expected 'elif', 'else', or keyword token 'end' to close if statement.",
+			error(fmt("Invalid %s token '%s' at line %d, column %d. Expected elif statemet, else statement, or keyword token 'end' to close if statement.",
 			  tk.type, tk.value, tk.src_line, tk.src_column))
 		end
 	end
@@ -433,17 +448,6 @@ local function parse_var()
 
 	tk_index = tk_index + 1
 	return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_value()}
-
-	--[[
-	--												 unary '-'
-	if (is_tk_type_or_value(value_tk, TK_TYPES.NUM, TK_TYPES.ID, TK_TYPES.STR, "null", "true", "false", '!', '-', '(')) then
-		return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_expr()}
-	end
-	
-	error(fmt("Invalid %s token '%s', at line %d, column %d. Expected a number, string, identifier, 'true', 'false', '+', '-', or '(' token"..
-	  " to assign value for identifier '%s'",
-	  value_tk.type, value_tk.value, value_tk.src_line, value_tk.src_column, id_tk.value))
-	]]
 end
 
 function parse_struct()
@@ -470,7 +474,7 @@ function parse_struct()
 
 		if (tk.value == '}') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing elements of struct or misc token '}' to close struct.",
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing struct elements or misc token '}' to close struct.",
 		  tk.type, tk.value, tk.src_line, tk.src_column))
 	end
 
@@ -493,7 +497,7 @@ function parse_array()
 
 		if (tk.value == ']') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing elements of array or misc token ']' to close array",
+		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing array elements or misc token ']' to close array",
 		  tk.type, tk.value, tk.src_line, tk.src_column))
 	end
 
@@ -588,7 +592,7 @@ function parse_for(scope)
 	scope = get_loop_scope(scope)
 
 	-- awful error messags
-	expect_tk_of_value('(', "Expected misc token '(' to parse for loop statement arguments.")
+	expect_tk_of_value('(', "Expected misc token '(' prior to parsing for loop statement arguments.")
 	local index_id = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be for loop statement index identifier.")
 	
 	expect_tk_of_value(',', "Expected misc token ',' prior to parsing for loop statement index start expression.")
@@ -685,7 +689,7 @@ function parse_statement(scope, is_in_cases)
 		
 	elseif (tk.value == "ret") then
 		assert(scope == SCOPES.FN or scope == SCOPES.LOOP_IN_FN,
-		  fmt("Expected return statement at line %d, column %d to be inside function block or in nested loops inside said function block.", tk.src_line, tk.src_column))  
+		  fmt("Expected return statement at line %d, column %d to be a function block or in nested loops inside a function block.", tk.src_line, tk.src_column))  
 		return parse_ret(tk)
 	
 	elseif (tk.value == "while") then
@@ -739,7 +743,7 @@ local function parse_tokens()
 	local tk = next_tk()
 	
 	-- if token 'EOF' not reached, it must mean that an invalid token caused 'parse_block' to stop
-	assert(tk.value == "EOF", fmt("Invalid %s token '%s' at line %d, column %d. Expected an identifier, 'var', 'fn', or 'if' token",
+	assert(tk.value == "EOF", fmt("Invalid %s token '%s' at line %d, column %d. Expected a statement, function declaration, or function call",
 	  tk.type, tk.value, tk.src_line, tk.src_column))
 
 	return code_parse_tree
@@ -751,7 +755,7 @@ local function lex_src_text(src_file)
 	local NUM_OPS = {['+'] = true, ['-'] = true, ['*'] = true, ['/'] = true, ['%'] = true}
 	local BOOL_OPS = {['!'] = true, ['<'] = true, ['>'] = true}
 	local MISC = {['('] = true, [')'] = true, ['.'] = true, [','] = true, ['['] = true,
-	  [']'] = true, ['{'] = true, ['}'] = true, [':'] = true}
+	  [']'] = true, ['{'] = true, ['}'] = true, [':'] = true, ['?'] = true}
 	
 	local KEYWORDS = {["var"] = true, ["fn"] = true, ["if"] = true, ["elif"] = true,
 	  ["else"] = true, ["end"] = true, ["ret"] = true, ["skip"] = true,
@@ -945,7 +949,7 @@ local function lex_src_text(src_file)
 
 			elseif (BOOL_OPS[char]) then
 				tb_insert(tokens, lex_bool_op(char))
-					
+
 			elseif (char == '=') then
 				local SRC_COLUMN = char_index
 				char_index = char_index + 1

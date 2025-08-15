@@ -105,6 +105,29 @@ local SCOPES = {
 local tokens = {}
 local tk_index = 1
 
+local scope_stack = {}
+local scope = nil
+
+local function push_scope(new_scope)
+	local prev_scope = scope_stack[#scope_stack]
+	
+	if ((prev_scope == SCOPES.FN and new_scope == SCOPES.LOOP) or
+
+	   -- must mean it is a nested loop inside a function
+	  (prev_scope  == SCOPES.LOOP_IN_FN and new_scope == SCOPES.LOOP)) then
+		tb_insert(scope_stack, SCOPES.LOOP_IN_FN)
+	else
+		tb_insert(scope_stack, new_scope)
+	end
+	scope = scope_stack[#scope_stack]
+end
+
+local function pop_scope()
+	scope_stack[#scope_stack] = nil
+	scope = scope_stack[#scope_stack]
+	print("POP ", scope)
+end
+
 local function next_tk()
 	local tk = tokens[tk_index]
 	tk_index = tk_index + 1
@@ -197,6 +220,9 @@ end
 
 -- variadic parameters WILL ALWAYS be after named parameters
 function parse_fn()
+	print("FN CHANGE SCOPE")
+	push_scope(SCOPES.FN)
+	
 	local id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected identifier token for parsing function")
 	expect_tk_of_value('(',
 	  fmt("Expected misc token '(' for parsing parameters (or none) of function '%s'", id_tk.value))
@@ -255,6 +281,7 @@ function parse_fn()
 	local block = parse_block(SCOPES.FN)
 	expect_tk_of_value("end", fmt("Expected keyword token 'end' to close function '%s'", id_tk.value))
 
+	pop_scope()
 	return {type = PARSE_TYPES.FN, id_name = id_tk.value, params = params,
 	  has_variadic_params = has_variadic_params, block = block}
 end
@@ -284,6 +311,10 @@ function parse_fn_call(id_tk)
 			  fmt("Expected misc token '.' to parse variadic arguments for function call '%s'", id_tk.value))
 			expect_tk_of_value(')',
 			  fmt("Expected misc token ')' to close function call '%s'", id_tk.value))
+	
+			assert(scope == SCOPES.FN or scope == SCOPES.LOOP_IN_FN,
+			  fmt("At line %d, column %d. Expected function call '%s' to be inside or nested inside a function block since variadic arguments are present.",
+			  tk.src_line, tk.src_column, id_tk.value))
 			  
 			has_variadic_args = true  
 			break
@@ -305,22 +336,22 @@ function parse_fn_call(id_tk)
 	return {type = PARSE_TYPES.FN_CALL, id_name = id_tk.value, args = args, has_variadic_args = has_variadic_args}
 end
 
-local function parse_elif(scope)
+local function parse_elif()
 	expect_tk_of_value('(', "Expected misc token '(' to parse elif statement condition.")	  
 	local cond = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close elif statement condition.")
 
-	local block = parse_block(scope)
+	local block = parse_block()
 	return {type = PARSE_TYPES.ELIF, cond = cond, block = block}	
 end
 
 -- scope may be 'fn_block', which in that case it allows for return statements in here
-local function parse_if(scope)
+local function parse_if()
 	expect_tk_of_value('(', "Expected misc token '(' to parse if statement condition.")
 	local cond = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close if statement condition.")
 
-	local block = parse_block(scope)
+	local block = parse_block()
 	local elif_statements = {}
 	local else_block = nil
 
@@ -328,10 +359,10 @@ local function parse_if(scope)
 		local tk = next_tk()
 
 		if (tk.value == "elif") then
-			tb_insert(elif_statements, parse_elif(scope))
+			tb_insert(elif_statements, parse_elif())
 			
 		elseif (tk.value == "else") then
-			else_block = parse_block(scope)
+			else_block = parse_block()
 			expect_tk_of_value("end", "Expected keyword token 'end' to close else statement.")
 			break
 			
@@ -346,7 +377,7 @@ local function parse_if(scope)
 	return {type = PARSE_TYPES.IF, cond = cond, block = block, elif_statements = elif_statements, else_block = else_block}
 end
 
-local function parse_case(scope)
+local function parse_case()
 	local case_exprs = {}
 	local block;
 	tb_insert(case_exprs, parse_expr())
@@ -358,10 +389,10 @@ local function parse_case(scope)
 
 	expect_tk_of_value(':', "Expected misc token ':' to parse case block")
 	local IS_IN_CASES = true
-	return {case_exprs = case_exprs, block = parse_block(scope, IS_IN_CASES)}
+	return {case_exprs = case_exprs, block = parse_block(IS_IN_CASES)}
 end
 
-function parse_cases(scope)
+function parse_cases()
 	expect_tk_of_value('(', "Expected misc token '(' prior to parsing cases statement argument expression")
 	local value = parse_expr()
 	
@@ -372,14 +403,14 @@ function parse_cases(scope)
 	-- awful code, not the best
 	-- duplicate cases will be checked at run-time, since these are expression
 	while (true) do
-		tb_insert(cases, parse_case(scope))
+		tb_insert(cases, parse_case())
 
 		local tk = peek_tk()
 
 		if (tk.value == "none") then
 			tk_index = tk_index + 1
 			expect_tk_of_value(':', "Expected misc token ':' to parse case 'none' block")
-			none_case_block = parse_block(scope)
+			none_case_block = parse_block()
 			
 			expect_tk_of_value("end", "Expected statement(s), or keyword token 'end' to close cases statement")
 			break
@@ -572,20 +603,10 @@ function parse_ret()
 	return {type = PARSE_TYPES.RET, value = value}
 end
 
--- allows ret statements nested inside loops that are inside functions
-local function get_loop_scope(scope)
-	if (scope == SCOPES.FN) then
-		return SCOPES.LOOP_IN_FN	
-	elseif (scope == SCOPES.LOOP_IN_FN) then
-		return scope
-	end
-	return SCOPES.LOOP
-end
-
 -- scope refers to what scope the statement is in
-function parse_for(scope)
-	scope = get_loop_scope(scope)
-
+function parse_for()
+	push_scope(SCOPES.LOOP)
+	
 	-- awful error messags
 	expect_tk_of_value('(', "Expected misc token '(' prior to parsing for loop statement arguments.")
 	local index_id = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be for loop statement index identifier.")
@@ -602,15 +623,16 @@ function parse_for(scope)
 	local increment = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close for loop statement expressions.")
 
-	local block = parse_block(scope)
+	local block = parse_block()
 	expect_tk_of_value("end", "Expected keyword token 'end' to close for loop statement block.")
 
+	pop_scope()
 	return {type = PARSE_TYPES.FOR, index_id = index_id.value, limit = limit, increment = increment, block = block}
 end
 
-function parse_iter(scope)
-	scope = get_loop_scope(scope)
-
+function parse_iter()
+	push_scope(SCOPES.LOOP)
+	
 	expect_tk_of_value('(', "Expected misc token '(' to parse iter loop statement arguments.")
 
 	-- will be typechecked for a struct or array	
@@ -624,26 +646,30 @@ function parse_iter(scope)
 
 	expect_tk_of_value(')', "Expected misc token ')' to close iter loop statement arguments.")
 
-	local block = parse_block(scope)
+	local block = parse_block()
 	expect_tk_of_value("end", "Expected keyword token 'end' to close iter loop statement block.")
 
+	pop_scope()
 	return {type = PARSE_TYPES.ITER, value = value, index_id = index_id.value, element_id = element_id.value, block = block}
 end
 
-function parse_while(scope)
-	scope = get_loop_scope(scope)
+function parse_while()
+	push_scope(SCOPES.LOOP)
 	
 	expect_tk_of_value('(', "Expected misc token '(' prior to parsing while loop statement condition.")
 	local cond = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close while loop statement condition.")
 
-	local block = parse_block(scope)
+	local block = parse_block()
 	expect_tk_of_value("end", "Expected keyword token 'end' to close while loop statement block.")
+
+	pop_scope()
 	return {type = PARSE_TYPES.WHILE, cond = cond, block = block}
 end
 
-function parse_rep(scope)
-	scope = get_loop_scope(scope)
+function parse_rep()
+	push_scope(SCOPES.LOOP)
+	print(scope)
 	local block = parse_block(scope)
 	
 	expect_tk_of_value("until", "Expected keyword token 'until' to prior to parsing repeat loop condition.")
@@ -651,26 +677,28 @@ function parse_rep(scope)
 	expect_tk_of_value('(', "Expected misc token '(' to parse repeat loop statement condition.")
 	local cond = parse_expr()
 	expect_tk_of_value(')', "Expected misc token ')' to close repeat loop statement condition.")
-	
+
+	pop_scope()
+	print(scope)
 	return {type = PARSE_TYPES.REP, cond = cond, block = block}
 end
 
 -- scope may be 'nil'
 -- 'is_in_cases', not the most elegant solution, but it prevents an identifier from erroring if the tk after it is a ':', thus it is a case
-function parse_statement(scope, is_in_cases)
+function parse_statement(is_in_cases)
 	local tk = next_tk()
 	
 	if (tk.value == "var") then
 		return parse_var()
 		
 	elseif (tk.value == "if") then
-		return parse_if(scope)
+		return parse_if()
 		
 	elseif (tk.value == "cases") then
-		return parse_cases(scope)
+		return parse_cases()
 		
 	elseif (tk.value == "fn") then
-		return parse_fn(scope)
+		return parse_fn()
 		
 	elseif (tk.type == TK_TYPES.ID) then
 		local second_tk = peek_tk()
@@ -688,18 +716,20 @@ function parse_statement(scope, is_in_cases)
 		return parse_ret(tk)
 	
 	elseif (tk.value == "while") then
-		return parse_while(scope)
+		return parse_while()
 		
 	elseif (tk.value == "rep") then
-		return parse_rep(scope)
+		return parse_rep()
 			
 	elseif (tk.value == "for") then
-		return parse_for(scope)
+		return parse_for()
 		
 	elseif (tk.value == "iter") then
-		return parse_iter(scope)
+		return parse_iter()
 			
 	elseif (tk.value == "skip") then
+		print_pretty_tb(scope_stack)
+		print("SKIP SCOPE ", scope)
 		assert(scope == SCOPES.LOOP or scope == SCOPES.LOOP_IN_FN,
 		  fmt("Expected skip statement at line %d, column %d to be inside loop block.", tk.src_line, tk.src_column))  
 
@@ -711,13 +741,12 @@ function parse_statement(scope, is_in_cases)
 	end
 end
 
-function parse_block(scope, is_in_cases)
-	-- print(scope)
+function parse_block(is_in_cases)
 	local block = {}
 	local statement;
 	
 	repeat
-		statement = parse_statement(scope, is_in_cases)
+		statement = parse_statement(is_in_cases)
 		if (not statement) then break end
 
 		tb_insert(block, statement)
@@ -987,5 +1016,6 @@ return function(src_file)
 	local code_parse_tree = parse_tokens()
 
 	print_pretty_tb(code_parse_tree)
+	print("FINAL SCOPE: ", scope)
 	return code_parse_tree
 end

@@ -66,6 +66,8 @@ local SCOPES = {
 	LOOP = "loop",
 	LOOP_IN_FN = "loop_in_fn",
 }
+
+local INVALID_TK_MSG = "Invalid %s token '%s' at line %d, column %d. "
 		
 local tokens = {}
 local tk_index = 1
@@ -110,7 +112,7 @@ end
 local function expect_tk_of_type(type, fail_msg_detail)
 	local tk = next_tk()
 	assert(tk.type == type,
-	  fmt("Invalid %s token '%s' at line %d, column %d. ".. fail_msg_detail, tk.type, tk.value, tk.src_line, tk.src_column))
+	  fmt(INVALID_TK_MSG.. fail_msg_detail, tk.type, tk.value, tk.src_line, tk.src_column))
 	return tk
 end
 
@@ -118,7 +120,7 @@ end
 local function expect_tk_of_value(value, fail_msg_detail)
 	local tk = next_tk()
 	assert(tk.value == value,
-	  fmt("Invalid %s token '%s' at line %d, column %d. ".. fail_msg_detail, tk.type, tk.value, tk.src_line, tk.src_column))
+	  fmt(INVALID_TK_MSG.. fail_msg_detail, tk.type, tk.value, tk.src_line, tk.src_column))
 	return tk
 end
 
@@ -144,7 +146,7 @@ local function null_denot(tk)
 		return {type = PARSE_TYPES.UNA_EXPR, op = '!', right = parse_expr(BOOL_UNA_PREC)}
 	end		
 	
-	error(fmt("Invalid %s token '%s' at line %d, column %d. Expected number, identifier, 'true', 'false', 'null', '-', or '(' token for parsing expression.",
+	error(fmt(INVALID_TK_MSG.. "Expected number, identifier, 'true', 'false', 'null', '-', or '(' token for parsing expression.",
 	  tk.type, tk.value, tk.src_line, tk.src_column))
 end
 
@@ -294,7 +296,7 @@ function parse_fn_call(id_tk, src_line, src_column)
 
 		if (tk.value == ')') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in arguments, or misc token ')' to close function call '%s'.",
+		  fmt(INVALID_TK_MSG.. "Expected misc token ',' in arguments, or misc token ')' to close function call '%s'.",
 		  tk.type, tk.value, tk.src_line, tk.src_column, id_tk.value))
 		expect_arg = true
 	end
@@ -336,7 +338,7 @@ local function parse_if()
 		elseif (tk.value == "end") then
 			break
 		else
-			error(fmt("Invalid %s token '%s' at line %d, column %d. Expected elif statement, else statement, or keyword token 'end' to close if statement.",
+			error(fmt(INVALID_TK_MSG.. "Expected elif statement, else statement, or keyword token 'end' to close if statement.",
 			  tk.type, tk.value, tk.src_line, tk.src_column))
 		end
 	end
@@ -469,7 +471,7 @@ function parse_struct()
 
 		if (tk.value == '}') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing struct elements or misc token '}' to close struct.",
+		  fmt(INVALID_TK_MSG.. "Expected misc token ',' in parsing struct elements or misc token '}' to close struct.",
 		  tk.type, tk.value, tk.src_line, tk.src_column))
 	end
 
@@ -492,7 +494,7 @@ function parse_array()
 
 		if (tk.value == ']') then break end
 		assert(tk.value == ',',
-		  fmt("Invalid %s token '%s' at line %d, column %d. Expected misc token ',' in parsing array elements or misc token ']' to close array",
+		  fmt(INVALID_TK_MSG.. "Expected misc token ',' in parsing array elements or misc token ']' to close array",
 		  tk.type, tk.value, tk.src_line, tk.src_column))
 	end
 
@@ -560,7 +562,7 @@ function parse_id(id_tk, src_line, src_column)
 		return {type = PARSE_TYPES.INDEX_PATH_ASSIGN, id_name = id_tk.value, index_path = index_path, value = parse_expr()}
 	end
 
-	error(fmt("Invalid %s token '%s' at line %d, column %d. Expected assignment or function call for identifier '%s'.",
+	error(fmt(INVALID_TK_MSG.. "Expected assignment or function call for identifier '%s'.",
 	  second_tk.type, second_tk.value, second_tk.src_line, second_tk.src_column, id_tk.value))
 end
 
@@ -568,12 +570,13 @@ function parse_ret()
 	local tk = peek_tk()
 	local value = nil
 
-	if (tk.type ~= TK_TYPES.KEYWORD and tk.value ~= "EOF") then
-		value = parse_value()
+	if (tk.value == "false" or tk.value == "true" or tk.value == "null" or
+	  tk.type == TK_TYPES.NUM or tk.type == TK_TYPES.STR or tk.type == TK_TYPES.ID or tk.value == '(') then
+	  	value = parse_value()
 	else
 		value = parse_null()
 	end
-
+	
 	return {type = PARSE_TYPES.RET, value = value}
 end
 

@@ -31,7 +31,8 @@ local call_stack = {}
 local loop_stack = {{}}
 local index_stack = {}
 
-local fn_is_returning = false
+local nested_block_count = 0
+local is_fn_returning = false
 local fn_ret_val = {type = "keyword", value = "null"}
 
 local function push_index()
@@ -71,6 +72,10 @@ local function assert_tree_type(tree, error_msg, ...)
 	error(error_msg)
 end
 
+local function is_null(val)
+	return (val.type == TK_TYPES.KEYWORD) and val.value == "null"
+end
+
 local function is_expr(val)
 	return (val.type == PARSE_TYPES.UNA_EXPR or val.type == PARSE_TYPES.BIN_EXPR) or
 	false
@@ -78,20 +83,61 @@ end
 
 local function is_literal(val)
 	return (val.type == TK_TYPES.STR or val.type == TK_TYPES.NUM or
-	  val.value == "true" or val.value == "false" or val.value == "null") or
+	  ((val.type == TK_TYPES.KEYWORD) and (val.value == "true" or val.value == "false")) or is_null(val)) or
 	  false
 end
 
-local function eval_str_expr(left, op, right)
-	assert(op.value == '+',
+local function eval_str_expr(left, op_tk, right)
+	assert(op_tk.value == '+',
 	  fmt("Invalid %s operator '%s' at line %d, column %d, can only concatenate strings with operator '+'.",
-	  op.type, op.value, op.src_line, op.src_column))
+	  op_tk.type, op_tk.value, op_tk.src_line, op_tk.src_column))
 
 	assert(right.type == TK_TYPES.STR,
-	  fmt("Cannot concatenate string with %s at line %d, column %d.",
-	  right.type, op.src_line, op.src_column))
+	  fmt("Cannot concatenate string '%s' with %s '%s' at line %d, column %d.",
+	  left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
 	  
 	return {type = TK_TYPES.STR, value = left.value.. right.value,
+	  src_line = left.src_line, src_column = left.src_column}
+end
+
+local function eval_bool_expr(left, op_tk, right)
+	local op = op_tk.value
+	local value;
+
+	if (op == "==") then
+		assert(left.type == right.type or is_null(left) or is_null(right),
+		  fmt("Cannot compare if %s '%s' is equal to %s '%s' at line %d, column %d.",
+		  left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
+
+		value = (left.type == right.type and left.value == right.value) and "true" or "false"
+		return {type = TK_TYPES.KEYWORD, value = value,
+		  src_line = left.src_line, src_column = left.src_column}
+	elseif (op == "!=") then
+		assert(left.type == right.type or is_null(left) or is_null(right),
+		  fmt("Cannot compare if %s '%s' not equal to %s '%s' at line %d, column %d.",
+		  left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
+		  
+		value = (left.type ~= right.type or left.value ~= right.value) and "true" or "false"
+		return {type = TK_TYPES.KEYWORD, value = value,
+		  src_line = left.src_line, src_column = left.src_column}
+	end
+		  
+	-- is num op
+	assert(left.type == TK_TYPES.NUM and right.type == TK_TYPES.NUM,
+	  fmt("Cannot compare if %s '%s' is greater than %s '%s' at line %d, column %d, expected both to be numbers.",
+	  left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))	
+	  
+	if (op == '>') then
+		value = (left.value > right.value) and "true" or "false"
+	elseif (op == '<') then
+		value = (left.value < right.value) and "true" or "false"
+	elseif (op == ">=") then
+		value = (left.value >= right.value) and "true" or "false"
+	elseif (op == "<=") then
+		value = (left.value <= right.value) and "true" or "false"
+	end
+
+	return {type = TK_TYPES.KEYWORD, value = value,
 	  src_line = left.src_line, src_column = left.src_column}
 end
 
@@ -100,9 +146,17 @@ local function eval_expr(parse_tree)
 	local right = eval_value(parse_tree.right)
 	local op_tk = parse_tree.op_tk
 
-	if (left.type == TK_TYPES.STR) then
+	if (left.type == TK_TYPES.STR and op_tk.type == '+') then
 		return eval_str_expr(left, op_tk, right)
 	end
+
+	if (op_tk.type == TK_TYPES.BOOL_OP) then
+		return eval_bool_expr(left, op_tk, right)
+	end
+
+	assert(right.type == TK_TYPES.NUM,
+	  fmt("Cannot add number '%d' with %s '%s' at line %d, column %d.",
+	  left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
 
 	local op = op_tk.value
 	local left_val = left.value
@@ -136,14 +190,16 @@ function eval_value(val)
 		  val.value, val.src_line, val.src_column))
 
 		--[[
-		local value = deep_clone_tb(id_data.value)
-		value.src_line = val.src_line
-		value.src_column = val.src_column
+			local value = deep_clone_tb(id_data.value)
+			value.src_line = val.src_line
+			value.src_column = val.src_column
 		]]
 		return id_data.value
 	elseif (val.type == PARSE_TYPES.FN_CALL) then
 		run_fn_call(val)
-		return fn_ret_val
+		local ret_val = fn_ret_val
+		fn_ret_val = {type = "keyword", value = "null"}
+		return ret_val
 	end
 end
 
@@ -211,15 +267,37 @@ function run_fn_call(parse_tree)
 	end
 	-- deep clone, to prevent the parse tree's arg table itself from being modified since tables are passed by reference
 	call_stack[#call_stack + 1] = {id = id, args = deep_clone_tb(parse_tree.args),
-	  env = {vars = {}, fns = {}}, src_line = fn.src_line, src_column = fn.src_column}
+	  env = {vars = {}, fns = {}}, src_line = fn.src_line, src_column = fn.src_column, nested_block_count = 0}
 
 	run_block(fn.block)
+	call_stack[#call_stack] = nil
 end
 
 local function run_ret(parse_tree)
 	fn_ret_val = eval_value(parse_tree.value)
+	print("RET VAL", pretty_table(fn_ret_val))
 	is_fn_returning = true
-	call_stack[#call_stack] = nil
+end
+
+local function cond_run_block(cond, block)
+	local evalued = eval_value(cond)
+	local value = evalued.value
+
+	if (value ~= "null" and value ~= "false") then
+		run_block(block)
+		return true
+	end
+	return false
+end
+
+local function run_if(parse_tree)
+	cond_run_block(parse_tree.cond, parse_tree.block)
+	
+	for _, statement in ipairs(parse_tree.elif_statements) do
+		local ran = cond_run_block(statement.cond, statement.block)
+		if (ran) then return end
+	end
+	if (parse_tree.else_block) then run_block(parse_tree.else_block) end
 end
 
 local tasks = {
@@ -228,23 +306,40 @@ local tasks = {
 	[PARSE_TYPES.FN] = run_fn,
 	[PARSE_TYPES.FN_CALL] = run_fn_call,
 	[PARSE_TYPES.RET] = run_ret,
+	[PARSE_TYPES.IF] = run_if,
 }
 
 local function run_statement(block)
 	inc_index()
 	local statement = block[get_index()]
+	print("STMT", statement.type)
 	local task = tasks[statement.type]
 	task(statement)
 end
 
 function run_block(block)
+	local frame = call_stack[#call_stack]
+	if (frame) then frame.nested_block_count = frame.nested_block_count + 1 end
+	
 	push_index()
 	local end_index = #block
-	while (get_index() < end_index and not is_fn_returning) do
+	while (true) do
+		if (is_fn_returning) then
+			local frame = call_stack[#call_stack]
+			frame.nested_block_count = frame.nested_block_count - 1
+
+			if (frame.nested_block_count == 0) then
+				is_fn_returning = false
+			end
+
+			break
+		end
+
+		if (get_index() == end_index) then break end
 		run_statement(block)
 	end
 	pop_index()
-	is_fn_returning = false
+	if (frame and not is_fn_returning) then frame.nested_block_count = frame.nested_block_count - 1 end
 end
 
 return function(code_parse_tree)

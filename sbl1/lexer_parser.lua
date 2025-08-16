@@ -16,6 +16,8 @@
 
 		Should I 'optimize' multi-line comments? Making it only end if it finds characters '*/' at beginning or end of line?
 		I might just check if 'ret' is in function block by checking a call stack for any functions pushed
+
+		Add inc / dec, and '^' ops?
 ]]
 
 --[=[
@@ -38,45 +40,8 @@ local str_sub = string.sub
 local function print_pretty_tb(tb) print(pretty_table(tb)) end
 
 -- slightly more detailed for use of debugging messages
-local TK_TYPES = {
-	KEYWORD = "keyword",
-	ID = "identifier",
-	STR = "string",
-	NUM = "number",
-	BOOL = "boolean",
-	NUM_OP = "number operator",
-	BOOL_OP = "boolean operator",
-	COMP_NUM_OP = "compound number operator",
-	MISC = "misc",
-}
-
--- rename 'refer'? since it's just pass by value
-local PARSE_TYPES = {
-	FN = "fn",
-	FN_CALL = "fn_call",
-	ARRAY = "array",
-	STRUCT = "struct",
-	INDEX_PATH_ASSIGN = "index_path_assign",
-	INDEX_PATH = "index_path",
-	STRUCT_INDEX = "struct_index",
-	ARRAY_INDEX = "array_index",
-	REASSIGN = "reassign",
-	RET = "ret",
-	SKIP = "skip",
-	WHILE = "while",
-	FOR = "for",
-	REP = "rep",
-	IF = "if",
-	CASES = "cases",
-	ELIF = "elif",
-	DECLARE = "declare",
-	BLOCK = "block",
-	BIN_EXPR = "binary_expr",
-	UNA_EXPR = "unary_expr",
-	TERN_EXPR = "ternary_expr"
-}
-
-
+local TK_TYPES = require("tk_types")
+local PARSE_TYPES = require("parse_types")
 
 --[[
 	implement associativaty, to account for right associative operator '^'
@@ -211,7 +176,7 @@ function parse_expr(prec_limit)
 		if (op_tk.value == '?') then
 			left = parse_tern_expr(left, op)
 		else
-			left = {type = PARSE_TYPES.BIN_EXPR, left = left, op = op_tk.value, right = parse_expr(prec)}
+			left = {type = PARSE_TYPES.BIN_EXPR, left = left, op_tk = op_tk, right = parse_expr(prec)}
 		end
 	end
 
@@ -219,7 +184,7 @@ function parse_expr(prec_limit)
 end
 
 -- variadic parameters WILL ALWAYS be after named parameters
-function parse_fn()
+function parse_fn(src_line, src_column)
 	print("FN CHANGE SCOPE")
 	push_scope(SCOPES.FN)
 	
@@ -283,11 +248,12 @@ function parse_fn()
 
 	pop_scope()
 	return {type = PARSE_TYPES.FN, id_name = id_tk.value, params = params,
-	  has_variadic_params = has_variadic_params, block = block}
+	  has_variadic_params = has_variadic_params, block = block,
+	  src_line = src_line, src_column = src_column}
 end
 
 -- should 'id_tk' param be removed and just read via peek or next tk fn maybe?
-function parse_fn_call(id_tk)
+function parse_fn_call(id_tk, src_line, src_column)
 	local args = {}
 	local expect_arg = false
 	local has_variadic_args = false
@@ -333,7 +299,8 @@ function parse_fn_call(id_tk)
 		expect_arg = true
 	end
 
-	return {type = PARSE_TYPES.FN_CALL, id_name = id_tk.value, args = args, has_variadic_args = has_variadic_args}
+	return {type = PARSE_TYPES.FN_CALL, id_name = id_tk.value, args = args,
+	  has_variadic_args = has_variadic_args, src_line = src_line, src_column = src_column}
 end
 
 local function parse_elif()
@@ -369,7 +336,7 @@ local function parse_if()
 		elseif (tk.value == "end") then
 			break
 		else
-			error(fmt("Invalid %s token '%s' at line %d, column %d. Expected elif statemet, else statement, or keyword token 'end' to close if statement.",
+			error(fmt("Invalid %s token '%s' at line %d, column %d. Expected elif statement, else statement, or keyword token 'end' to close if statement.",
 			  tk.type, tk.value, tk.src_line, tk.src_column))
 		end
 	end
@@ -462,18 +429,20 @@ local function parse_null()
 end
 
 -- the manual tk_index incrementing is atrocious, never skip planning!
-local function parse_var()
+local function parse_var(src_line, src_column)
 	local id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected identifier token to parse var.")
 
 	-- gotta peak so 'tk_index' isn't 2 higher than #tokens
 	local tk = peek_tk()
 	
 	if (tk.value ~= '=') then
-		return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_null()}
+		return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_null(),
+		  src_line = src_line, src_column = src_column}
 	end
 
 	tk_index = tk_index + 1
-	return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_value()}
+	return {type = PARSE_TYPES.DECLARE, id_name = id_tk.value, value = parse_value(),
+	  src_line = src_line, src_column = src_column}
 end
 
 function parse_struct()
@@ -557,7 +526,10 @@ function parse_id_value(id_tk)
 		  
 	elseif (tk.value == '(') then
 		tk_index = tk_index + 1
-		return parse_fn_call(id_tk)
+		local src_line = id_tk.src_line
+		local src_column = id_tk.src_column
+		
+		return parse_fn_call(id_tk, src_line, src_column)
 	end
 
 	-- allow for peeked tk to be read for something else
@@ -565,7 +537,7 @@ function parse_id_value(id_tk)
 end
 
 -- parse id when it's a statement (eg. a = 2, arr[0] = 5)
-function parse_id(id_tk)
+function parse_id(id_tk, src_line, src_column)
 	local second_tk = next_tk()
 	
 	if (second_tk.value == '=') then
@@ -577,7 +549,7 @@ function parse_id(id_tk)
 		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = value}
 
 	elseif (second_tk.value == '(') then
-		return parse_fn_call(id_tk)
+		return parse_fn_call(id_tk, src_line, src_column)
 		
 	elseif (second_tk.value == '.' or second_tk.value == '[') then
 		-- allow for '[' or '.' tk to be read by 'form_index_path', ik it's not very 'clean'
@@ -598,6 +570,8 @@ function parse_ret()
 
 	if (tk.type ~= TK_TYPES.KEYWORD and tk.value ~= "EOF") then
 		value = parse_value()
+	else
+		value = parse_null()
 	end
 
 	return {type = PARSE_TYPES.RET, value = value}
@@ -687,9 +661,11 @@ end
 -- 'is_in_cases', not the most elegant solution, but it prevents an identifier from erroring if the tk after it is a ':', thus it is a case
 function parse_statement(is_in_cases)
 	local tk = next_tk()
+	local src_line = tk.src_line
+	local src_column = tk.src_column
 	
 	if (tk.value == "var") then
-		return parse_var()
+		return parse_var(src_line, src_column)
 		
 	elseif (tk.value == "if") then
 		return parse_if()
@@ -698,7 +674,7 @@ function parse_statement(is_in_cases)
 		return parse_cases()
 		
 	elseif (tk.value == "fn") then
-		return parse_fn()
+		return parse_fn(src_line, src_column)
 		
 	elseif (tk.type == TK_TYPES.ID) then
 		local second_tk = peek_tk()
@@ -708,7 +684,7 @@ function parse_statement(is_in_cases)
 			tk_index = tk_index - 1
 			return
 		end
-		return parse_id(tk)
+		return parse_id(tk, src_line, src_column)
 		
 	elseif (tk.value == "ret") then
 		assert(scope == SCOPES.FN or scope == SCOPES.LOOP_IN_FN,
@@ -822,21 +798,19 @@ local function lex_src_text(src_file)
 	local function lex_str()
 		local SRC_COLUMN = char_index
 		local SRC_LINE = line_count
-		local str = '"'
+		local str = ''
 
 		char_index = char_index + 1
 		
 		while (true) do
 			local char = str_sub(current_line, char_index, char_index)
-			str = str.. char
 			
 			if (char == '"') then
 				char_index = char_index + 1
-
-				-- //temp
-				-- error(str)
 				return {type = TK_TYPES.STR, value = str, src_line = SRC_LINE, src_column = SRC_COLUMN}
 			end
+			
+			str = str.. char
 
 			if (#current_line == 0 or char_index == #current_line + 1) then
 				str = str.. '\n'

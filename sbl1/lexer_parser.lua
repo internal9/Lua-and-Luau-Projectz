@@ -92,7 +92,6 @@ end
 local function pop_scope()
 	scope_stack[#scope_stack] = nil
 	scope = scope_stack[#scope_stack]
-	print("POP ", scope)
 end
 
 local function next_tk()
@@ -186,7 +185,6 @@ end
 
 -- variadic parameters WILL ALWAYS be after named parameters
 function parse_fn(src_line, src_column)
-	print("FN CHANGE SCOPE")
 	push_scope(SCOPES.FN)
 	
 	local id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected identifier token for parsing function")
@@ -655,7 +653,6 @@ end
 
 function parse_rep()
 	push_scope(SCOPES.LOOP)
-	print(scope)
 	local block = parse_block(scope)
 	
 	expect_tk_of_value("until", "Expected keyword token 'until' to prior to parsing repeat loop condition.")
@@ -665,7 +662,6 @@ function parse_rep()
 	expect_tk_of_value(')', "Expected misc token ')' to close repeat loop statement condition.")
 
 	pop_scope()
-	print(scope)
 	return {type = PARSE_TYPES.REP, cond = cond, block = block}
 end
 
@@ -836,9 +832,6 @@ local function lex_src_text(src_file)
 			else
 				char_index = char_index + 1
 			end
-
---			print(line_count, char_index, #current_line, char)
---			char_index = char_index + 1
 		end
 	end
 
@@ -988,7 +981,6 @@ local function lex_src_text(src_file)
 			else
 				error(fmt("Invalid character '%s' at line %d, column %d", char, line_count, char_index))
 			end
-			print(char_index, #current_line)
 		end
 
 		next_line()
@@ -1000,13 +992,7 @@ end
 
 return function(src_file)
 	-- why
-	
-	lex_src_text(src_file)
-	print_pretty_tb(tokens)
-	
+	lex_src_text(src_file)	
 	local code_parse_tree = parse_tokens()
-
-	print_pretty_tb(code_parse_tree)
-	print("FINAL SCOPE: ", scope)
 	return code_parse_tree
 end

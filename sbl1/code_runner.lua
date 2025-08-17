@@ -612,7 +612,7 @@ local function run_index_path_assign(parse_tree)
 	local var_value = existing_var.value
 	if (var_value.type == PARSE_TYPES.ARRAY) then
 		local arr = existing_var.value
-		
+		local first_arr = arr	
 --[[		local index_data = table.remove(parse_tree.index_path, 1)
 
 		local index = eval_value(index_data.value)
@@ -641,6 +641,7 @@ local function run_index_path_assign(parse_tree)
 			  last_index.type, last_index.value, arr.value, last_index_data.src_line, last_index_data.src_column))
 
 			arr.elements[last_index.value + 1] = eval_value(parse_tree.value)
+			first_arr.value = arr_to_debug_str(first_arr.elements)
 		elseif (arr.type == PARSE_TYPES.STRUCT) then
 			
 		else
@@ -721,5 +722,4 @@ end
 
 return function(code_parse_tree)
 	run_block(code_parse_tree)
-	print("LCS: ", #loop_stack, #call_stack)
 end

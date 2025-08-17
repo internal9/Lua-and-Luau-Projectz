@@ -271,6 +271,7 @@ local function struct_to_debug_str(elements)
 	return str
 end
 
+
 function eval_value(val)
 	if (is_literal(val)) then return val end
 	
@@ -290,7 +291,7 @@ function eval_value(val)
 
 		-- arrays and structs are pass by reference
 		if (value.type ~= PARSE_TYPES.ARRAY and value.type ~= PARSE_TYPES.STRUCT) then
-			value = deep_clone_tb(id_data.value)
+			value = deep_clone_tb(value)
 			value.src_line = val.src_line
 			value.src_column = val.src_column
 		end
@@ -329,10 +330,11 @@ function eval_value(val)
 			
 			for i, index_data in ipairs(val.value) do
 				element = index_arr(element, index_data)
-				print("ELEMENT")
-				print_pretty_tb(element)
+			--	print("ELEMENT")
+			--	print_pretty_tb(element)
 			end
-
+			
+--			error(pretty_table(val))
 			return element
 		elseif (var_value.type == PARSE_TYPES.STRUCT) then
 
@@ -578,8 +580,17 @@ function index_arr(arr, index_data)
 
 	-- zero based indexing converted to lua's 1 based
 	local element = arr.elements[index.value + 1]
-	print(fmt("ELEMENT AT INDEX '%d': ", index.value), pretty_table(element))
 
+
+	if (not element) then
+		return {type = TK_TYPES.KEYWORD, value = "null",
+		  src_line = index_data.src_line, src_column = index_data.src_column}
+	end
+	if (element.type ~= PARSE_TYPES.ARRAY or element.type ~= PARSE_TYPES.STRUCT) then
+		element = deep_clone_tb(element)
+		element.src_line = index_data.src_line
+		element.src_column = index_data.src_column
+	end
 	return element
 end
 
@@ -600,8 +611,10 @@ local function run_index_path_assign(parse_tree)
 	if (var_value.type == PARSE_TYPES.ARRAY) then
 		local index_data = table.remove(parse_tree.index_path, 1)
 		local element = index_arr(var_value, index_data)
-		print("ELEMENT")
-		print_pretty_tb(element)
+		
+--		print("ELEMENT")
+--		print_pretty_tb(element)
+
 		for i, index_data in ipairs(parse_tree.index_path) do
 			element = index_arr(element, index_data)
 			print("ELEMENT")

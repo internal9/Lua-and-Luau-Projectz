@@ -271,6 +271,35 @@ local function struct_to_debug_str(elements)
 	return str
 end
 
+local function get_val_from_index_path(index_path)
+	local id = index_path.id_name
+	local first_index = index_path.value[1]
+
+	local var = search_val_from_envs("vars", id)
+	assert(var, fmt("Failed to index var '%s' at line %d, column %d since it's undeclared.",
+	  id, first_index.src_line, first_index.src_column))
+	  
+	local var_value = var.value
+	
+	if (var_value.type == PARSE_TYPES.ARRAY) then
+		local index_data = table.remove(index_path.value, 1)
+		local element = index_arr(var_value, index_data)
+		
+		print("ELEMENT")
+		print_pretty_tb(element)
+		
+		for i, index_data in ipairs(index_path.value) do
+			element = index_arr(element, index_data)
+		end
+		
+		return element
+	elseif (var_value.type == PARSE_TYPES.STRUCT) then
+
+	end
+
+	error(fmt("Cannot index %s '%s' at line %d, column %d, only structs or arrays",
+	  var_value.type, var_value.value, first_index.src_line, first_index.src_column))
+end
 
 function eval_value(val)
 	if (is_literal(val)) then return val end
@@ -318,31 +347,7 @@ function eval_value(val)
 		struct.value = struct_to_debug_str(struct.elements)
 		return struct
 	elseif (val.type == PARSE_TYPES.INDEX_PATH) then
-		local var = search_val_from_envs("vars", val.id_name)
-		local var_value = var.value
-		
-		if (var_value.type == PARSE_TYPES.ARRAY) then
-			local index_data = table.remove(val.value, 1)
-			local element = index_arr(var_value, index_data)
-			
-			print("ELEMENT")
-			print_pretty_tb(element)
-			
-			for i, index_data in ipairs(val.value) do
-				element = index_arr(element, index_data)
-			--	print("ELEMENT")
-			--	print_pretty_tb(element)
-			end
-			
---			error(pretty_table(val))
-			return element
-		elseif (var_value.type == PARSE_TYPES.STRUCT) then
-
-		end
-
-		local first_index = val.value[1]
-		error(fmt("Cannot index %s '%s' at line %d, column %d, only structs or arrays",
-		  var_value.type, var_value.value, first_index.src_line, first_index.src_column))
+		return get_val_from_index_path(val)
 	end
 end
 

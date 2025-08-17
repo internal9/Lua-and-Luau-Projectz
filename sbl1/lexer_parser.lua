@@ -139,7 +139,6 @@ local function null_denot(tk)
 		return expr
 		
 	elseif (tk.type == TK_TYPES.ID) then
-		print(tk.value, peek_tk().value)
 		return parse_id_value(tk)
 
 	elseif (tk.value == '!') then
@@ -543,7 +542,8 @@ function parse_id(id_tk, src_line, src_column)
 	local second_tk = next_tk()
 	
 	if (second_tk.value == '=') then
-		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = parse_value()}
+		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value,
+		  value = parse_value(), src_line = src_line, src_column = src_column}
 		
 	elseif (second_tk.type == TK_TYPES.COMP_NUM_OP) then
 		local op =  string.sub(second_tk.value, 1, 1)
@@ -571,7 +571,8 @@ function parse_ret()
 	local value = nil
 
 	if (tk.value == "false" or tk.value == "true" or tk.value == "null" or
-	  tk.type == TK_TYPES.NUM or tk.type == TK_TYPES.STR or tk.type == TK_TYPES.ID or tk.value == '(') then
+	  tk.type == TK_TYPES.NUM or tk.type == TK_TYPES.STR or tk.type == TK_TYPES.ID or
+	  tk.value == '(' or tk.value == '[' or tk.value == '{') then
 	  	value = parse_value()
 	else
 		value = parse_null()
@@ -707,13 +708,18 @@ function parse_statement(is_in_cases)
 		return parse_iter()
 			
 	elseif (tk.value == "skip") then
-		print_pretty_tb(scope_stack)
-		print("SKIP SCOPE ", scope)
 		assert(scope == SCOPES.LOOP or scope == SCOPES.LOOP_IN_FN,
 		  fmt("Expected skip statement at line %d, column %d to be inside loop block.", tk.src_line, tk.src_column))  
 
 		-- ya idrk what to do here
 		return {type = PARSE_TYPES.SKIP}
+		
+	elseif (tk.value == "break") then
+		assert(scope == SCOPES.LOOP or scope == SCOPES.LOOP_IN_FN,
+		  fmt("Expected break statement at line %d, column %d to be inside loop block.", tk.src_line, tk.src_column))  
+
+		-- ya idrk what to do here
+		return {type = PARSE_TYPES.BREAK}
 	else
 		-- allow for this unmatched token to be read by whatever called this fn (eg. if it's "end", "for", etc)
 		tk_index = tk_index - 1
@@ -763,7 +769,7 @@ local function lex_src_text(src_file)
 	  ["else"] = true, ["end"] = true, ["ret"] = true, ["skip"] = true,
 	  ["for"] = true, ["while"] = true, ["iter"] = true, ["rep"] = true, ["until"] = true,
 	  ["true"] = true, ["false"] = true, ["null"] = true,
-	  ["cases"] = true, ["none"] = true}
+	  ["cases"] = true, ["none"] = true, ["break"] = true}
 
 	local current_line = src_file:read("*line")
 	local char_index = 1

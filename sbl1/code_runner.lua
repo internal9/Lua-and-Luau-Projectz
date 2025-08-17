@@ -9,14 +9,21 @@ local env = {}
 
 -- built in globals
 local function G_log(...)
-	for _, arg in ipairs({...}) do
-		print(arg.value)
+	local evaluated = {}
+	for index, arg in ipairs({...}) do
+		evaluated[index] = eval_value(arg).value
 	end
+	print(table.unpack(evaluated))
 end
 
 -- log global environment
-local function G_log_genv()
-	print_pretty_tb(env)
+local function G_log_genv(section)
+	if (section) then
+		assert(section.type == TK_TYPES.STR and (section.value == "fns" or section.value == "vars"))
+		print_pretty_tb(env[section.value])
+	else
+		print_pretty_tb(env)
+	end
 end
 
 -- stuff
@@ -28,11 +35,11 @@ env.fns = {
 }
 
 local call_stack = {}
-local loop_stack = {{}}
 local index_stack = {}
 
 local nested_block_count = 0
 local is_fn_returning = false
+local is_loop_breaking = false
 local fn_ret_val = {type = "keyword", value = "null"}
 
 local function push_index()
@@ -85,6 +92,17 @@ local function is_literal(val)
 	return (val.type == TK_TYPES.STR or val.type == TK_TYPES.NUM or
 	  ((val.type == TK_TYPES.KEYWORD) and (val.value == "true" or val.value == "false")) or is_null(val)) or
 	  false
+end
+
+local function cond_run_block(cond, block)
+	local evalued = eval_value(cond)
+	local value = evalued.value
+
+	if (value ~= "null" and value ~= "false") then
+		run_block(block)
+		return true
+	end
+	return false
 end
 
 local function eval_str_expr(left, op_tk, right)
@@ -141,7 +159,7 @@ local function eval_bool_expr(left, op_tk, right)
 	  src_line = left.src_line, src_column = left.src_column}
 end
 
-local function eval_expr(parse_tree)
+function eval_expr(parse_tree)
 	local left = eval_value(parse_tree.left)
 	local right = eval_value(parse_tree.right)
 	local op_tk = parse_tree.op_tk
@@ -154,6 +172,10 @@ local function eval_expr(parse_tree)
 		return eval_bool_expr(left, op_tk, right)
 	end
 
+	assert(left.type == TK_TYPES.NUM,
+	  fmt("Cannot add %s '%s' with %s '%s' at line %d, column %d.",
+	  left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
+	  
 	assert(right.type == TK_TYPES.NUM,
 	  fmt("Cannot add number '%d' with %s '%s' at line %d, column %d.",
 	  left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
@@ -178,6 +200,34 @@ local function eval_expr(parse_tree)
 	return {type = TK_TYPES.NUM, value = value, src_line = left.src_line, src_column = left.src_column}
 end
 
+local function arr_to_debug_str(elements)
+	local str = '['
+	for index, element in ipairs(elements) do
+		if (index == #elements) then
+			str = str.. element.value
+		else
+			str = str.. element.value.. ", "
+		end
+	end
+	str = str.. ']'
+	return str
+end
+
+local function struct_to_debug_str(elements)
+	local done = {}
+	local str = '{'
+	for key, element in pairs(elements) do
+		if (done[elements]) then
+			str = str.. fmt("%s = %s", key, element.value)
+		else
+			str = str.. fmt("%s = %s", key, element.value).. ", "
+			done[elements] = element
+		end
+	end
+	str = str.. '}'
+	return str
+end
+
 function eval_value(val)
 	if (is_literal(val)) then return val end
 	
@@ -189,17 +239,28 @@ function eval_value(val)
 		  fmt("Failed to retrieve identifier '%s' at line %d, column %d, since it is undeclared.",
 		  val.value, val.src_line, val.src_column))
 
-		--[[
-			local value = deep_clone_tb(id_data.value)
-			value.src_line = val.src_line
-			value.src_column = val.src_column
-		]]
 		return id_data.value
 	elseif (val.type == PARSE_TYPES.FN_CALL) then
 		run_fn_call(val)
 		local ret_val = fn_ret_val
 		fn_ret_val = {type = "keyword", value = "null"}
 		return ret_val
+	elseif (val.type == PARSE_TYPES.ARRAY) then
+		local arr = deep_clone_tb(val)
+		for index, element in ipairs(arr.elements) do
+			arr.elements[index] = eval_value(element)
+		end
+		-- for log debugging
+		arr.value = arr_to_debug_str(arr.elements)
+		return arr
+	elseif (val.type == PARSE_TYPES.STRUCT) then
+		local struct = deep_clone_tb(val)
+		for index, element in ipairs(struct.elements) do
+			struct.elements[index] = eval_value(element)
+		end
+		-- for log debugging
+		struct.value = struct_to_debug_str(struct.elements)
+		return struct
 	end
 end
 
@@ -220,8 +281,10 @@ local function get_current_env()
 end
 
 -- real deal
-local function run_while()
-	
+local function run_while(parse_tree)
+	while (cond_run_block(parse_tree.cond, parse_tree.block)) do
+		
+	end
 end
 
 local function run_declare(parse_tree)
@@ -234,11 +297,24 @@ local function run_declare(parse_tree)
 		  id, parse_tree.src_line, parse_tree.src_column, existing_var.src_line, existing_var.src_column))
 	end
 
-	local value, type = eval_value(parse_tree.value)
+	local value = eval_value(parse_tree.value)
 
 	print(id, get_current_env() == env)
 	get_current_env().vars[id] = {src_line = parse_tree.src_line,
-	  src_column = parse_tree.src_column, value = value, type = type}
+	  src_column = parse_tree.src_column, value = value}
+end
+
+local function run_reassign(parse_tree)
+	local id = parse_tree.id_name
+	local existing_var = search_val_from_envs("vars", id)
+	
+	-- can't use assert, else it will error about nil indexing 'existing_var' for format
+	if (not existing_var) then
+		error(fmt("Failed to reassign var '%s' at line %d, column %d since it's undeclared.",
+		  id, parse_tree.src_line, parse_tree.src_column))
+	end
+
+	existing_var.value = eval_value(parse_tree.value)
 end
 
 local function run_fn(parse_tree)
@@ -262,7 +338,7 @@ function run_fn_call(parse_tree)
 	 id, parse_tree.src_line, parse_tree.src_column))
 
 	if (fn.is_built_in) then
-		fn.run()
+		fn.run(table.unpack(parse_tree.args))
 		return
 	end
 	-- deep clone, to prevent the parse tree's arg table itself from being modified since tables are passed by reference
@@ -279,17 +355,6 @@ local function run_ret(parse_tree)
 	is_fn_returning = true
 end
 
-local function cond_run_block(cond, block)
-	local evalued = eval_value(cond)
-	local value = evalued.value
-
-	if (value ~= "null" and value ~= "false") then
-		run_block(block)
-		return true
-	end
-	return false
-end
-
 local function run_if(parse_tree)
 	cond_run_block(parse_tree.cond, parse_tree.block)
 	
@@ -300,6 +365,10 @@ local function run_if(parse_tree)
 	if (parse_tree.else_block) then run_block(parse_tree.else_block) end
 end
 
+local function run_break()
+	is_loop_breaking = true
+end
+
 local tasks = {
 	[PARSE_TYPES.WHILE] = run_while,
 	[PARSE_TYPES.DECLARE] = run_declare,
@@ -307,6 +376,8 @@ local tasks = {
 	[PARSE_TYPES.FN_CALL] = run_fn_call,
 	[PARSE_TYPES.RET] = run_ret,
 	[PARSE_TYPES.IF] = run_if,
+	[PARSE_TYPES.REASSIGN] = run_reassign,
+	[PARSE_TYPES.BREAK] = run_break,
 }
 
 local function run_statement(block)

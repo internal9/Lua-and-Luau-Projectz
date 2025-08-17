@@ -409,13 +409,15 @@ function form_index_path()
 			tk_index = tk_index + 1
 			index = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token for indexing struct.")
 			
-			tb_insert(index_path, {type = PARSE_TYPES.STRUCT_INDEX, value = index})
+			tb_insert(index_path, {type = PARSE_TYPES.STRUCT_INDEX, value = index,
+			  src_line = tk.src_line, src_column = tk.src_column})
 							
 		elseif (tk.value == '[') then
 			tk_index = tk_index + 1
 			index = parse_expr()
 			
-			tb_insert(index_path, {type = PARSE_TYPES.ARRAY_INDEX, value = index})
+			tb_insert(index_path, {type = PARSE_TYPES.ARRAY_INDEX, value = index,
+			  src_line = tk.src_line, src_column = tk.src_column})
 			expect_tk_of_value(']', "Expected misc token ']' for closing indexing of array.")
 		else
 			break
@@ -562,7 +564,8 @@ function parse_id(id_tk, src_line, src_column)
 		local index_path = form_index_path()
 
 		expect_tk_of_value('=', "Expected misc token '=' for assigning value for index path.")
-		return {type = PARSE_TYPES.INDEX_PATH_ASSIGN, id_name = id_tk.value, index_path = index_path, value = parse_expr()}
+		return {type = PARSE_TYPES.INDEX_PATH_ASSIGN, id_name = id_tk.value, index_path = index_path, value = parse_expr(),
+		  src_line = src_line, src_column = src_column}
 	end
 
 	error(fmt(INVALID_TK_MSG.. "Expected assignment or function call for identifier '%s'.",

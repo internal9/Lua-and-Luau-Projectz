@@ -283,7 +283,7 @@ function eval_value(val)
 
 		local id_data = search_val_from_envs("vars", val.value)
 		assert(id_data,
-		  fmt("Failed to retrieve identifier '%s' at line %d, column %d, since it is undeclared.",
+		  fmt("Failed to retrieve identifier '%s' at line %d, column %d, since it's undeclared.",
 		  val.value, val.src_line, val.src_column))
 
 		return id_data.value
@@ -416,7 +416,8 @@ local function run_for(parse_tree)
 		local new_index_val = {type = TK_TYPES.NUM, value = new_val,
          	  src_line = index_id_tk.src_line, src_column = index_id_tk.src_column}
 		env.vars = {[index_id_tk.value] = new_index_val}
-		env.fns = {}		
+		env.fns = {}
+		
 		run_block(parse_tree.block)
 	end
 	loop_frame[#loop_frame] = nil
@@ -450,11 +451,8 @@ local function run_reassign(parse_tree)
 	local id = parse_tree.id_name
 	local existing_var = search_val_from_envs("vars", id)
 	
-	-- can't use assert, else it will error about nil indexing 'existing_var' for format
-	if (not existing_var) then
-		error(fmt("Failed to reassign var '%s' at line %d, column %d since it's an undeclared.",
-		  id, parse_tree.src_line, parse_tree.src_column))
-	end
+	assert(existing_var, fmt("Failed to reassign var '%s' at line %d, column %d since it's undeclared.",
+	  id, parse_tree.src_line, parse_tree.src_column))
 
 	existing_var.value = eval_value(parse_tree.value)
 end
@@ -481,7 +479,7 @@ function run_fn_call(parse_tree)
 	local id = parse_tree.id_name
 	local fn = search_val_from_envs("fns", id)
 	assert(fn,
-	 fmt("Failed to call fn '%s' at line %d, column %d since it is undeclared.",
+	 fmt("Failed to call fn '%s' at line %d, column %d since it's undeclared.",
 	 id, parse_tree.src_line, parse_tree.src_column))
 
 	-- deep clone, to prevent the parse tree's arg table itself from being modified since tables are passed by reference
@@ -504,7 +502,7 @@ function run_fn_call(parse_tree)
 		env.vars[param.value] = {value = arg, src_line = param.src_line, src_column = param.src_column}
 	end
 
-	call_stack[#call_stack + 1] = {id = id, loop_envs = {},
+	call_stack[#call_stack + 1] = {id = id,
 	  env = env, src_line = fn.src_line, src_column = fn.src_column, nested_block_count = 0}
 
 	-- allow for nested loop environments inside functions
@@ -530,6 +528,40 @@ local function run_if(parse_tree)
 	if (parse_tree.else_block) then run_block(parse_tree.else_block) end
 end
 
+local function run_index_path_assign(parse_tree)
+	print_pretty_tb(parse_tree)
+	local id = parse_tree.id_name
+	-- either struct or an array, this is why static typing is better
+	local existing_var = search_val_from_envs("vars", id)
+	assert(existing_var, fmt("Failed to index path assign var '%s' at line %d, column %d since it's undeclared.",
+	  id, parse_tree.src_line, parse_tree.src_column))
+
+	-- why
+	local var_value = existing_var.value
+	if (var_value.type == PARSE_TYPES.ARRAY) then
+		local index_data = table.remove(parse_tree.index_path, 1)
+		local index_value = index_data.value
+
+		print(pretty_table(index_data))
+		assert(index_data.type == PARSE_TYPES.ARRAY_INDEX,
+		  fmt("Cannot have struct index '%s' for array '%s' at line %d, column %d, only number indexes.",
+		  index_value.value, var_value.value, index_data.src_line, index_data.src_column))
+		  
+		local index = eval_value(index_value)
+		assert(index.type == TK_TYPES.NUM,
+		  fmt("Cannot have %s '%s' as number index for array '%s' at line %d, column %d.",
+		  index.type, index.value, var_value.value, index_data.src_line, index_data.src_column))
+
+		print(index.value)
+	elseif (var_value.type == PARSE_TYPES.STRUCT) then
+		
+	else
+		print(pretty_table(var_value))
+		error(fmt("Cannot index path assign %s '%s' at line %d, column %d, only arrays or structs.",
+		  var_value.type, var_value.value, var_value.src_line, var_value.src_column))
+	end
+end
+
 local function run_break()
 	is_loop_breaking = true
 end
@@ -551,6 +583,7 @@ local tasks = {
 	[PARSE_TYPES.REP] = run_rep,
 	[PARSE_TYPES.FOR] = run_for,
 	[PARSE_TYPES.ITER] = run_iter,
+	[PARSE_TYPES.INDEX_PATH_ASSIGN] = run_index_path_assign
 }
 
 local function run_statement(block)

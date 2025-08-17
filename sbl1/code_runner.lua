@@ -528,6 +528,32 @@ local function run_if(parse_tree)
 	if (parse_tree.else_block) then run_block(parse_tree.else_block) end
 end
 
+local function index_arr(arr, index_data)
+	assert(arr.type == PARSE_TYPES.ARRAY,
+	  fmt("Cannot index path assign %s '%s' at line %d, column %d, only arrays or structs.",
+	  arr.type, arr.value, index_data.src_line, index_data.src_column))
+	local index_value = index_data.value
+
+	assert(index_data.type == PARSE_TYPES.ARRAY_INDEX,
+	  fmt("Cannot have struct index '%s' for array '%s' at line %d, column %d, only number indexes.",
+	  index_value.value, arr.value, index_data.src_line, index_data.src_column))
+	  
+	local index = eval_value(index_value)
+	assert(index.type == TK_TYPES.NUM,
+	  fmt("Cannot have %s '%s' as number index for array '%s' at line %d, column %d.",
+	  index.type, index.value, arr.value, index_data.src_line, index_data.src_column))
+
+	-- zero based indexing converted to lua's 1 based
+	local element = arr.elements[index.value + 1]
+	print(fmt("ELEMENT AT INDEX '%d': ", index.value), pretty_table(element))
+
+	return element
+end
+
+local function index_struct(struct, index_data)
+
+end
+
 local function run_index_path_assign(parse_tree)
 	print_pretty_tb(parse_tree)
 	local id = parse_tree.id_name
@@ -540,19 +566,15 @@ local function run_index_path_assign(parse_tree)
 	local var_value = existing_var.value
 	if (var_value.type == PARSE_TYPES.ARRAY) then
 		local index_data = table.remove(parse_tree.index_path, 1)
-		local index_value = index_data.value
-
-		print(pretty_table(index_data))
-		assert(index_data.type == PARSE_TYPES.ARRAY_INDEX,
-		  fmt("Cannot have struct index '%s' for array '%s' at line %d, column %d, only number indexes.",
-		  index_value.value, var_value.value, index_data.src_line, index_data.src_column))
-		  
-		local index = eval_value(index_value)
-		assert(index.type == TK_TYPES.NUM,
-		  fmt("Cannot have %s '%s' as number index for array '%s' at line %d, column %d.",
-		  index.type, index.value, var_value.value, index_data.src_line, index_data.src_column))
-
-		print(index.value)
+		local element = index_arr(var_value, index_data)
+		print("ELEMENT")
+		print_pretty_tb(element)
+		for i, index_data in ipairs(parse_tree.index_path) do
+			element = index_arr(element, index_data)
+			print("ELEMENT")
+			print_pretty_tb(element)
+		end
+		
 	elseif (var_value.type == PARSE_TYPES.STRUCT) then
 		
 	else

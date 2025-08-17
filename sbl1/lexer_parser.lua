@@ -449,11 +449,11 @@ local function parse_var(src_line, src_column)
 	  src_line = src_line, src_column = src_column}
 end
 
-function parse_struct()
+function parse_struct(src_line, src_column)
 	-- surely there is a better way to do this entire thing lol?
 	if (peek_tk().value == '}') then
 		tk_index = tk_index + 1
-		return {type = PARSE_TYPES.STRUCT, elements = {}}
+		return {type = PARSE_TYPES.STRUCT, elements = {}, src_line = src_line, src_column = src_column}
 	end
 
 	local elements = {}
@@ -476,11 +476,11 @@ function parse_struct()
 		  fmt(INVALID_TK_MSG.. "Expected misc token ',' in parsing struct elements or misc token '}' to close struct.",
 		  tk.type, tk.value, tk.src_line, tk.src_column))
 	end
-
-	return {type = PARSE_TYPES.STRUCT, elements = elements}
+	
+	return {type = PARSE_TYPES.STRUCT, elements = elements, src_line = src_line, src_column = src_column}
 end
 
-function parse_array()
+function parse_array(src_line, src_column)
 	local elements = {}
 
 	-- surely there is a better way to do this entire thing lol?
@@ -501,18 +501,20 @@ function parse_array()
 	end
 
 	::skip_parse::
-	return {type = PARSE_TYPES.ARRAY, elements = elements}
+	return {type = PARSE_TYPES.ARRAY, elements = elements, src_line = src_line, src_column = src_column}
 end
 
 -- parsing a value that is usually on the right side of a declaration or initialization
 function parse_value()
 	local tk = next_tk()
+	local src_line = tk.src_line
+	local src_column = tk.src_column
 	
 	if (tk.value == '{') then
-		return parse_struct()
+		return parse_struct(src_line, src_column)
 		
 	elseif (tk.value == '[') then
-		return parse_array()
+		return parse_array(src_line, src_column)
 	end
 
 	-- allow this token to be read by 'parse_expr'

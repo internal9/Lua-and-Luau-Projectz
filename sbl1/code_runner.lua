@@ -105,6 +105,17 @@ local function cond_run_block(cond, block)
 	return false
 end
 
+local function eval_tern_expr(cond, true_val, false_val)
+	local evaluated = eval_value(cond)
+	true_val = eval_value(true_val)
+	false_val = eval_value(false_val)
+
+	if (is_null(evaluated) or (evaluated.type == TK_TYPES.KEYWORD and evaluated.value == "false")) then
+		return false_val
+	end
+	return true_val
+end
+
 local function eval_str_expr(left, op_tk, right)
 	assert(op_tk.value == '+',
 	  fmt("Invalid %s operator '%s' at line %d, column %d, can only concatenate strings with operator '+'.",
@@ -171,7 +182,7 @@ function eval_expr(parse_tree)
 	if (op_tk.type == TK_TYPES.BOOL_OP) then
 		return eval_bool_expr(left, op_tk, right)
 	end
-
+	
 	assert(left.type == TK_TYPES.NUM,
 	  fmt("Cannot add %s '%s' with %s '%s' at line %d, column %d.",
 	  left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
@@ -233,6 +244,8 @@ function eval_value(val)
 	
 	if (is_expr(val)) then
 		return eval_expr(val)
+	elseif (val.type == PARSE_TYPES.TERN_EXPR) then
+		return eval_tern_expr(val.cond, val.true_val, val.false_val)
 	elseif (val.type == TK_TYPES.ID) then
 		local id_data = search_val_from_envs("vars", val.value)
 		assert(id_data,
@@ -255,7 +268,7 @@ function eval_value(val)
 		return arr
 	elseif (val.type == PARSE_TYPES.STRUCT) then
 		local struct = deep_clone_tb(val)
-		for index, element in ipairs(struct.elements) do
+		for index, element in pairs(struct.elements) do
 			struct.elements[index] = eval_value(element)
 		end
 		-- for log debugging

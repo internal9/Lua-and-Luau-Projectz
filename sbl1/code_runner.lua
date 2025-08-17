@@ -286,9 +286,14 @@ function eval_value(val)
 		  fmt("Failed to retrieve identifier '%s' at line %d, column %d, since it's undeclared.",
 		  val.value, val.src_line, val.src_column))
 
-		local value = deep_clone_tb(id_data.value)
-		value.src_line = val.src_line
-		value.src_column = val.src_column
+		local value = id_data.value
+
+		-- arrays and structs are pass by reference
+		if (value.type ~= PARSE_TYPES.ARRAY and value.type ~= PARSE_TYPES.STRUCT) then
+			value = deep_clone_tb(id_data.value)
+			value.src_line = val.src_line
+			value.src_column = val.src_column
+		end
 		return value
 	elseif (val.type == PARSE_TYPES.FN_CALL) then
 		run_fn_call(val)
@@ -311,6 +316,31 @@ function eval_value(val)
 		-- for log debugging
 		struct.value = struct_to_debug_str(struct.elements)
 		return struct
+	elseif (val.type == PARSE_TYPES.INDEX_PATH) then
+		local var = search_val_from_envs("vars", val.id_name)
+		local var_value = var.value
+		
+		if (var_value.type == PARSE_TYPES.ARRAY) then
+			local index_data = table.remove(val.value, 1)
+			local element = index_arr(var_value, index_data)
+			
+			print("ELEMENT")
+			print_pretty_tb(element)
+			
+			for i, index_data in ipairs(val.value) do
+				element = index_arr(element, index_data)
+				print("ELEMENT")
+				print_pretty_tb(element)
+			end
+
+			return element
+		elseif (var_value.type == PARSE_TYPES.STRUCT) then
+
+		end
+
+		local first_index = val.value[1]
+		error(fmt("Cannot index %s '%s' at line %d, column %d, only structs or arrays",
+		  var_value.type, var_value.value, first_index.src_line, first_index.src_column))
 	end
 end
 
@@ -531,9 +561,9 @@ local function run_if(parse_tree)
 	if (parse_tree.else_block) then run_block(parse_tree.else_block) end
 end
 
-local function index_arr(arr, index_data)
+function index_arr(arr, index_data)
 	assert(arr.type == PARSE_TYPES.ARRAY,
-	  fmt("Cannot index path assign %s '%s' at line %d, column %d, only arrays or structs.",
+	  fmt("Cannot index %s '%s' at line %d, column %d, only arrays or structs.",
 	  arr.type, arr.value, index_data.src_line, index_data.src_column))
 	local index_value = index_data.value
 
@@ -553,7 +583,7 @@ local function index_arr(arr, index_data)
 	return element
 end
 
-local function index_struct(struct, index_data)
+function index_struct(struct, index_data)
 
 end
 

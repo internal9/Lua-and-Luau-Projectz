@@ -11,7 +11,7 @@ local env = {}
 local function G_log(...)
 	local evaluated = {}
 	for index, arg in ipairs({...}) do
-		evaluated[index] = search_val_from_envs("vars", arg.value).value
+		evaluated[index] = arg.value
 	end
 	print(table.unpack(evaluated))
 end
@@ -406,23 +406,24 @@ function run_fn_call(parse_tree)
 	 fmt("Failed to call fn '%s' at line %d, column %d since it is undeclared.",
 	 id, parse_tree.src_line, parse_tree.src_column))
 
+	-- deep clone, to prevent the parse tree's arg table itself from being modified since tables are passed by reference
+	local args = deep_clone_tb(parse_tree.args)
+	
 	if (fn.is_built_in) then
-		-- error(pretty_table(parse_tree))
-		fn.run(table.unpack(parse_tree.args))
+		for index, arg in ipairs(args) do
+			args[index] = eval_value(arg)
+		end
+		fn.run(table.unpack(args))
 		return
 	end
 
 	local env = {vars = {}, fns = {}}
-	-- deep clone, to prevent the parse tree's arg table itself from being modified since tables are passed by reference
-	local args = deep_clone_tb(parse_tree.args)
 
 	for index, param in ipairs(fn.params) do
 		local arg = parse_tree.args[index]
-		-- print_pretty_tb(parse_tree.args)
-		local evalued_arg = (arg) and eval_value(arg) or {type = TK_TYPES.KEYWORD, value = "null"}
-		evalued_arg.src_line = param.src_line
-		evalued_arg.src_column = param.src_column
-		env.vars[param.value] = evalued_arg
+		arg = (arg) and eval_value(arg) or {type = TK_TYPES.KEYWORD, value = "null",
+		  src_line = param_src_line, src_column = param.src_column}
+		env.vars[param.value] = {value = arg, src_line = param.src_line, src_column = param.src_column}
 	end
 
 	call_stack[#call_stack + 1] = {id = id,

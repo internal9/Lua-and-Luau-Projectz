@@ -36,6 +36,7 @@ env.fns = {
 
 local call_stack = {}
 local index_stack = {}
+local loop_stack = {{}}
 
 local nested_block_count = 0
 local is_fn_returning = false
@@ -161,7 +162,7 @@ local function eval_bool_expr(left, op_tk, right)
 		  
 	-- is num op
 	assert(left.type == TK_TYPES.NUM and right.type == TK_TYPES.NUM,
-	  fmt("Cannot compare if %s '%s' is greater than %s '%s' at line %d, column %d, expected both to be numbers.",
+	  fmt("Cannot perform boolean expression with %s '%s' with %s '%s' at line %d, column %d, expected both to be numbers.",
 	  left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))	
 	  
 	if (op == '>') then
@@ -309,33 +310,57 @@ function eval_value(val)
 end
 
 function search_val_from_envs(type, id)
-	local val = env[type][id]
-	if (val) then return val end
-
+	for i = #loop_stack, 1, -1 do
+		local loop_frame = loop_stack[i]
+		local loop_env = loop_frame[#loop_frame]
+		if (loop_env) then
+			local val = loop_env[type][id]
+			if (val) then return val end
+		end		
+	end
 	for i = #call_stack, 1, -1 do
 		local frame = call_stack[i]
-		val = frame.env[type][id]
-		if (val) then return val end		
+		local val = frame.env[type][id]
+		if (val) then return val end
 	end
+
+	local val = env[type][id]
+	if (val) then return val end
 end
 
 function get_current_env()
-	if (#call_stack ~= 0) then return call_stack[#call_stack].env end
+	local loop_frame = loop_stack[#loop_stack]
+	if (loop_frame) then
+		local loop_env = loop_frame[#loop_frame]
+		if (loop_env) then return loop_env end
+	end
+	local frame = call_stack[#call_stack]
+	if (frame) then
+		return frame.env
+	end
 	return env
 end
 
 -- real deal
 local function run_while(parse_tree)
-	-- error(#call_stack)
+	local env = {vars = {}, fns = {}}
+	local loop_frame = loop_stack[#loop_stack]
+	loop_frame[#loop_frame + 1] = env
 	while (cond_run_block(parse_tree.cond, parse_tree.block) and not is_fn_returning) do
 		if (is_loop_breaking) then
 			is_loop_breaking = false
 			break
 		end
+		env.vars = {}
+		env.fns = {}
 	end
+	loop_frame[#loop_frame] = nil
 end
 
 local function run_rep(parse_tree)
+	local env = {vars = {}, fns = {}}
+	local loop_frame = loop_stack[#loop_stack]
+	loop_frame[#loop_frame + 1] = env
 	repeat
 		if (is_loop_breaking) then
 			is_loop_breaking = false
@@ -343,7 +368,10 @@ local function run_rep(parse_tree)
 		end
 
 		run_block(parse_tree.block)
+		env.vars = {}
+		env.fns = {}
 	until (not is_falsy(eval_value(parse_tree.cond)))
+	loop_frame[#loop_frame] = nil
 end
 
 local function run_iter(parse_tree)
@@ -353,7 +381,7 @@ end
 local function run_declare(parse_tree)
 	local id = parse_tree.id_name
 	local existing_var = get_current_env().vars[id]
-	
+	--print_pretty_tb(loop_stack)
 	-- can't use assert, else it will error about nil indexing 'existing_var' for format
 	if (existing_var) then
 		error(fmt("Failed to declare var '%s' at line %d, column %d since it's already declared at line %d, column %d.",
@@ -423,11 +451,14 @@ function run_fn_call(parse_tree)
 		env.vars[param.value] = {value = arg, src_line = param.src_line, src_column = param.src_column}
 	end
 
-	call_stack[#call_stack + 1] = {id = id,
+	call_stack[#call_stack + 1] = {id = id, loop_envs = {},
 	  env = env, src_line = fn.src_line, src_column = fn.src_column, nested_block_count = 0}
 
+	-- allow for nested loop environments inside functions
+	loop_stack[#loop_stack + 1] = {}
 	run_block(fn.block)
 	call_stack[#call_stack] = nil
+	loop_stack[#loop_stack] = nil
 end
 
 local function run_ret(parse_tree)
@@ -510,4 +541,5 @@ end
 
 return function(code_parse_tree)
 	run_block(code_parse_tree)
+	print("LCS: ", #loop_stack, #call_stack)
 end

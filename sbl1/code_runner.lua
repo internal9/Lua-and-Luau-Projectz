@@ -285,8 +285,8 @@ local function get_val_from_index_path(index_path)
 		local index_data = table.remove(index_path.value, 1)
 		local element = index_arr(var_value, index_data)
 		
-		print("ELEMENT")
-		print_pretty_tb(element)
+--		print("ELEMENT")
+--		print_pretty_tb(element)
 		
 		for i, index_data in ipairs(index_path.value) do
 			element = index_arr(element, index_data)
@@ -352,18 +352,13 @@ function eval_value(val)
 end
 
 function search_val_from_envs(type, id)
---	print_pretty_tb(loop_stack)
 	for i = #loop_stack, 1, -1 do
---		print(id, i)
 		local loop_frame = loop_stack[i]
 
 		for ii = #loop_frame, 1, -1 do
 			local loop_env = loop_frame[ii]
-	--		print(loop_env, pretty_table(loop_frame), #loop_frame)
 			if (loop_env) then
 				local val = loop_env[type][id]
---				print("LOOP ENV")
---				print(val, pretty_table(loop_env.vars), pretty_table(loop_frame), "INDE", i)
 				if (val) then return val end
 			end
 		end
@@ -572,6 +567,7 @@ function index_arr(arr, index_data)
 	assert(arr.type == PARSE_TYPES.ARRAY,
 	  fmt("Cannot index %s '%s' at line %d, column %d, only arrays or structs.",
 	  arr.type, arr.value, index_data.src_line, index_data.src_column))
+	  
 	local index_value = index_data.value
 
 	assert(index_data.type == PARSE_TYPES.ARRAY_INDEX,
@@ -591,7 +587,7 @@ function index_arr(arr, index_data)
 		return {type = TK_TYPES.KEYWORD, value = "null",
 		  src_line = index_data.src_line, src_column = index_data.src_column}
 	end
-	if (element.type ~= PARSE_TYPES.ARRAY or element.type ~= PARSE_TYPES.STRUCT) then
+	if (element.type ~= PARSE_TYPES.ARRAY and element.type ~= PARSE_TYPES.STRUCT) then
 		element = deep_clone_tb(element)
 		element.src_line = index_data.src_line
 		element.src_column = index_data.src_column
@@ -604,28 +600,52 @@ function index_struct(struct, index_data)
 end
 
 local function run_index_path_assign(parse_tree)
-	print_pretty_tb(parse_tree)
+--	print_pretty_tb(parse_tree)
 	local id = parse_tree.id_name
+	
 	-- either struct or an array, this is why static typing is better
 	local existing_var = search_val_from_envs("vars", id)
 	assert(existing_var, fmt("Failed to index path assign var '%s' at line %d, column %d since it's undeclared.",
 	  id, parse_tree.src_line, parse_tree.src_column))
-
+	
 	-- why
 	local var_value = existing_var.value
 	if (var_value.type == PARSE_TYPES.ARRAY) then
-		local index_data = table.remove(parse_tree.index_path, 1)
-		local element = index_arr(var_value, index_data)
+		local arr = existing_var.value
 		
---		print("ELEMENT")
---		print_pretty_tb(element)
+--[[		local index_data = table.remove(parse_tree.index_path, 1)
 
-		for i, index_data in ipairs(parse_tree.index_path) do
-			element = index_arr(element, index_data)
-			print("ELEMENT")
-			print_pretty_tb(element)
-		end
+		local index = eval_value(index_data.value)
+		assert(index.type == TK_TYPES.NUM,
+		  fmt("Cannot have %s '%s' as number index for array '%s' at line %d, column %d.",
+		  index.type, index.value, arr.value, index_data.src_line, index_data.src_column))
+]]
+		local last_index_data = table.remove(parse_tree.index_path)
+		local last_index = eval_value(last_index_data.value)
 		
+		for i, index_data in ipairs(parse_tree.index_path) do
+			if (arr.type == PARSE_TYPES.ARRAY) then
+				arr = index_arr(arr, index_data)
+			elseif (arr.type == PARSE_TYPES.STRUCT) then
+
+			else
+				error("ASDAD")
+			end
+--			print("ARRAY")
+--			print_pretty_tb(arr)
+		end
+
+		if (arr.type == PARSE_TYPES.ARRAY) then
+			assert(last_index.type == TK_TYPES.NUM,
+			  fmt("Cannot have %s '%s' as number index for array '%s' at line %d, column %d.",
+			  last_index.type, last_index.value, arr.value, last_index_data.src_line, last_index_data.src_column))
+
+			arr.elements[last_index.value + 1] = eval_value(parse_tree.value)
+		elseif (arr.type == PARSE_TYPES.STRUCT) then
+			
+		else
+			error(arr.type)
+		end
 	elseif (var_value.type == PARSE_TYPES.STRUCT) then
 		
 	else

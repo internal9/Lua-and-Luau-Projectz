@@ -590,7 +590,7 @@ function parse_for()
 	
 	-- awful error messags
 	expect_tk_of_value('(', "Expected misc token '(' prior to parsing for loop statement arguments.")
-	local index_id = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be for loop statement index identifier.")
+	local index_id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be for loop statement index identifier.")
 	
 	expect_tk_of_value(',', "Expected misc token ',' prior to parsing for loop statement index start expression.")
 	local start = parse_expr()
@@ -608,7 +608,7 @@ function parse_for()
 	expect_tk_of_value("end", "Expected keyword token 'end' to close for loop statement block.")
 
 	pop_scope()
-	return {type = PARSE_TYPES.FOR, index_id = index_id.value, limit = limit, increment = increment, block = block}
+	return {type = PARSE_TYPES.FOR, index_id_tk = index_id_tk, start = start, limit = limit, increment = increment, block = block}
 end
 
 function parse_iter()
@@ -620,10 +620,10 @@ function parse_iter()
 	local value = parse_value()
 	expect_tk_of_value(',', "Expected misc token ',' prior to parsing iter loop statement index identifier.")
 
-	local index_id = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be iter loop statement index identifier.")
+	local index_id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be iter loop statement index identifier.")
 	expect_tk_of_value(',', "Expected misc token ',' prior to parsing iter loop statement element identifier.")
 	
-	local element_id = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be iter loop statement element identifier.")
+	local element_id_tk = expect_tk_of_type(TK_TYPES.ID, "Expected an identifier token to be iter loop statement element identifier.")
 
 	expect_tk_of_value(')', "Expected misc token ')' to close iter loop statement arguments.")
 
@@ -631,7 +631,7 @@ function parse_iter()
 	expect_tk_of_value("end", "Expected keyword token 'end' to close iter loop statement block.")
 
 	pop_scope()
-	return {type = PARSE_TYPES.ITER, value = value, index_id = index_id.value, element_id = element_id.value, block = block}
+	return {type = PARSE_TYPES.ITER, value = value, index_id_tk = index_id_tk, element_id_tk = element_id_tk, block = block}
 end
 
 function parse_while()

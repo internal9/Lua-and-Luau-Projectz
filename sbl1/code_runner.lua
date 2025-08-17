@@ -279,6 +279,8 @@ function eval_value(val)
 	elseif (val.type == PARSE_TYPES.TERN_EXPR) then
 		return eval_tern_expr(val.cond, val.true_val, val.false_val)
 	elseif (val.type == TK_TYPES.ID) then
+		-- print_pretty_tb(loop_stack)
+
 		local id_data = search_val_from_envs("vars", val.value)
 		assert(id_data,
 		  fmt("Failed to retrieve identifier '%s' at line %d, column %d, since it is undeclared.",
@@ -310,13 +312,21 @@ function eval_value(val)
 end
 
 function search_val_from_envs(type, id)
+--	print_pretty_tb(loop_stack)
 	for i = #loop_stack, 1, -1 do
+--		print(id, i)
 		local loop_frame = loop_stack[i]
-		local loop_env = loop_frame[#loop_frame]
-		if (loop_env) then
-			local val = loop_env[type][id]
-			if (val) then return val end
-		end		
+
+		for ii = #loop_frame, 1, -1 do
+			local loop_env = loop_frame[ii]
+	--		print(loop_env, pretty_table(loop_frame), #loop_frame)
+			if (loop_env) then
+				local val = loop_env[type][id]
+--				print("LOOP ENV")
+--				print(val, pretty_table(loop_env.vars), pretty_table(loop_frame), "INDE", i)
+				if (val) then return val end
+			end
+		end
 	end
 	for i = #call_stack, 1, -1 do
 		local frame = call_stack[i]
@@ -374,8 +384,51 @@ local function run_rep(parse_tree)
 	loop_frame[#loop_frame] = nil
 end
 
-local function run_iter(parse_tree)
+local function run_for(parse_tree)
+	local env = {vars = {}, fns = {}}
+	local loop_frame = loop_stack[#loop_stack]
+	loop_frame[#loop_frame + 1] = env
+	
+	local index_id_tk = deep_clone_tb(parse_tree.index_id_tk)
+	local start = eval_value(parse_tree.start)
+	local limit = eval_value(parse_tree.limit)
+	local increment = eval_value(parse_tree.increment)
 
+	assert(start.type == TK_TYPES.NUM,
+	  fmt("Cannot have %s '%s' at line %d, column %d as for loop start value, only a number.",
+	  start.type, start.value, start.src_line, start.src_column))
+	  
+	assert(limit.type == TK_TYPES.NUM,
+	  fmt("Cannot have %s '%s' at line %d, column %d as for loop limit value, only a number.",
+	  limit.type, limit.value, limit.src_line, limit.src_column))
+	  
+	assert(increment.type == TK_TYPES.NUM,
+	  fmt("Cannot have %s '%s' at line %d, column %d as for loop increment value, only a number.",
+	  increment.type, increment.value, increment.src_line, increment.src_column))
+	  
+	for index = start.value, limit.value, increment.value do
+		if (is_loop_breaking) then
+			is_loop_breaking = false
+			break
+		end
+		local new_val = deep_clone_tb(start)
+		new_val.value = index
+		local new_index_val = {type = TK_TYPES.NUM, value = new_val,
+         	  src_line = index_id_tk.src_line, src_column = index_id_tk.src_column}
+		env.vars = {[index_id_tk.value] = new_index_val}
+		env.fns = {}		
+		run_block(parse_tree.block)
+	end
+	loop_frame[#loop_frame] = nil
+end
+
+local function run_iter(parse_tree)
+	local env = {vars = {}, fns = {}}
+	local loop_frame = loop_stack[#loop_stack]
+	loop_frame[#loop_frame + 1] = env
+	-- print_parse_tree(parse_tree)
+
+	loop_frame[#loop_frame] = nil
 end
 
 local function run_declare(parse_tree)
@@ -496,6 +549,7 @@ local tasks = {
 	[PARSE_TYPES.SKIP] = run_skip,
 	[PARSE_TYPES.BREAK] = run_break,
 	[PARSE_TYPES.REP] = run_rep,
+	[PARSE_TYPES.FOR] = run_for,
 	[PARSE_TYPES.ITER] = run_iter,
 }
 

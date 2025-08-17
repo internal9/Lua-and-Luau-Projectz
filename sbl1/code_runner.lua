@@ -286,7 +286,10 @@ function eval_value(val)
 		  fmt("Failed to retrieve identifier '%s' at line %d, column %d, since it's undeclared.",
 		  val.value, val.src_line, val.src_column))
 
-		return id_data.value
+		local value = deep_clone_tb(id_data.value)
+		value.src_line = val.src_line
+		value.src_column = val.src_column
+		return value
 	elseif (val.type == PARSE_TYPES.FN_CALL) then
 		run_fn_call(val)
 		local ret_val = fn_ret_val

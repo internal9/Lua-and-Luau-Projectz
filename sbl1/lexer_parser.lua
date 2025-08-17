@@ -245,7 +245,8 @@ function parse_fn(src_line, src_column)
 	end
 
 	local block = parse_block(SCOPES.FN)
-	expect_tk_of_value("end", fmt("Expected keyword token 'end' to close function '%s'", id_tk.value))
+	expect_tk_of_value("end", fmt("Expected keyword token 'end' to close function '%s' beginning at line %d, column %d.",
+	  id_tk.value, src_line, src_column))
 
 	pop_scope()
 	return {type = PARSE_TYPES.FN, id_name = id_tk.value, params = params,

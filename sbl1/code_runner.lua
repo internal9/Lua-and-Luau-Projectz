@@ -206,7 +206,7 @@ function eval_expr(parse_tree)
 	local right = eval_value(parse_tree.right)
 	local op_tk = parse_tree.op_tk
 
-	if (left.type == TK_TYPES.STR and op_tk.type == '+') then
+	if (left.type == TK_TYPES.STR and op_tk.value == '+') then
 		return eval_str_expr(left, op_tk, right)
 	end
 
@@ -215,8 +215,8 @@ function eval_expr(parse_tree)
 	end
 	
 	assert(left.type == TK_TYPES.NUM,
-	  fmt("Cannot do arithmetic operation on %s '%s' with %s '%s' at line %d, column %d.",
-	  left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
+	  fmt("Cannot do arithmetic operation '%s' on %s '%s' with %s '%s' at line %d, column %d.",
+	  op_tk.value, left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
 	  
 	assert(right.type == TK_TYPES.NUM,
 	  fmt("Cannot do arithmetic operation on number '%d' with %s '%s' at line %d, column %d.",
@@ -271,7 +271,7 @@ local function struct_to_debug_str(elements)
 end
 
 function eval_value(val)
-	if (is_literal(val)) then print("IS LIT", val) return val end
+	if (is_literal(val)) then return val end
 	
 	if (is_expr(val)) then
 		return eval_expr(val)
@@ -279,7 +279,6 @@ function eval_value(val)
 		return eval_tern_expr(val.cond, val.true_val, val.false_val)
 	elseif (val.type == TK_TYPES.ID) then
 		local id_data = search_val_from_envs("vars", val.value)
-		print(pretty_table(get_current_env()), id_data)
 		assert(id_data,
 		  fmt("Failed to retrieve identifier '%s' at line %d, column %d, since it is undeclared.",
 		  val.value, val.src_line, val.src_column))
@@ -316,7 +315,6 @@ function search_val_from_envs(type, id)
 	for i = #call_stack, 1, -1 do
 		local frame = call_stack[i]
 		val = frame.env[type][id]
-		print("FRAME")
 		if (val) then return val end		
 	end
 end
@@ -328,11 +326,12 @@ end
 
 -- real deal
 local function run_while(parse_tree)
-	while (cond_run_block(parse_tree.cond, parse_tree.block)) do
+	-- error(#call_stack)
+	while (cond_run_block(parse_tree.cond, parse_tree.block) and not is_fn_returning) do
 		if (is_loop_breaking) then
 			is_loop_breaking = false
 			break
-		end				
+		end
 	end
 end
 
@@ -362,8 +361,6 @@ local function run_declare(parse_tree)
 	end
 
 	local value = eval_value(parse_tree.value)
-
-	print(id, get_current_env() == env)
 	get_current_env().vars[id] = {src_line = parse_tree.src_line,
 	  src_column = parse_tree.src_column, value = value}
 end
@@ -374,7 +371,7 @@ local function run_reassign(parse_tree)
 	
 	-- can't use assert, else it will error about nil indexing 'existing_var' for format
 	if (not existing_var) then
-		error(fmt("Failed to reassign var '%s' at line %d, column %d since it's undeclared.",
+		error(fmt("Failed to reassign var '%s' at line %d, column %d since it's an undeclared.",
 		  id, parse_tree.src_line, parse_tree.src_column))
 	end
 
@@ -496,8 +493,8 @@ function run_block(block)
 			break
 		end
 		if (is_loop_breaking) then
-			local frame = call_stack[#call_stack]
-			if (frame) then frame.nested_block_count = frame.nested_block_count - 1 end
+			--local frame = call_stack[#call_stack]
+			-- if (frame) then frame.nested_block_count = frame.nested_block_count - 1 end
 			break
 		end
 		if (is_loop_skipping) then

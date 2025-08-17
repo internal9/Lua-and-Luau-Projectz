@@ -131,7 +131,7 @@ local function null_denot(tk)
 		return tk
 		
 	elseif (tk.value == '-') then	
-		return {type = PARSE_TYPES.UNA_EXPR, op = tk.value, right = parse_expr(NUM_UNA_PREC)}
+		return {type = PARSE_TYPES.UNA_EXPR, op_tk = tk, right = parse_expr(NUM_UNA_PREC)}
 		
 	elseif (tk.value == '(') then
 		local expr = parse_expr()
@@ -142,7 +142,7 @@ local function null_denot(tk)
 		return parse_id_value(tk)
 
 	elseif (tk.value == '!') then
-		return {type = PARSE_TYPES.UNA_EXPR, op = '!', right = parse_expr(BOOL_UNA_PREC)}
+		return {type = PARSE_TYPES.UNA_EXPR, op_tk = tk, right = parse_expr(BOOL_UNA_PREC)}
 	end		
 	
 	error(fmt(INVALID_TK_MSG.. "Expected number, identifier, 'true', 'false', 'null', '-', or '(' token for parsing expression.",
@@ -547,7 +547,9 @@ function parse_id(id_tk, src_line, src_column)
 		
 	elseif (second_tk.type == TK_TYPES.COMP_NUM_OP) then
 		local op =  string.sub(second_tk.value, 1, 1)
-		local value = {type = PARSE_TYPES.BIN_EXPR, left = id_tk, op = op, right = parse_expr()}
+		second_tk.type = TK_TYPES.NUM_OP
+		second_tk.value = op
+		local value = {type = PARSE_TYPES.BIN_EXPR, left = id_tk, op_tk = second_tk, right = parse_expr()}
 		return {type = PARSE_TYPES.REASSIGN, id_name = id_tk.value, value = value}
 
 	elseif (second_tk.value == '(') then

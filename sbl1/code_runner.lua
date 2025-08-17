@@ -40,6 +40,7 @@ local index_stack = {}
 local nested_block_count = 0
 local is_fn_returning = false
 local is_loop_breaking = false
+local is_loop_skipping = false
 local fn_ret_val = {type = "keyword", value = "null"}
 
 local function push_index()
@@ -94,11 +95,16 @@ local function is_literal(val)
 	  false
 end
 
+-- truthy is nything besides null or false
+local function is_falsy(val)
+	return is_null(val) or (val.type == TK_TYPES.KEYWORD and val.value == "false")
+end
+
 local function cond_run_block(cond, block)
 	local evalued = eval_value(cond)
 	local value = evalued.value
 
-	if (value ~= "null" and value ~= "false") then
+	if (not is_falsy(evalued)) then
 		run_block(block)
 		return true
 	end
@@ -110,7 +116,7 @@ local function eval_tern_expr(cond, true_val, false_val)
 	true_val = eval_value(true_val)
 	false_val = eval_value(false_val)
 
-	if (is_null(evaluated) or (evaluated.type == TK_TYPES.KEYWORD and evaluated.value == "false")) then
+	if (is_falsy(evaluated)) then
 		return false_val
 	end
 	return true_val
@@ -149,6 +155,8 @@ local function eval_bool_expr(left, op_tk, right)
 		value = (left.type ~= right.type or left.value ~= right.value) and "true" or "false"
 		return {type = TK_TYPES.KEYWORD, value = value,
 		  src_line = left.src_line, src_column = left.src_column}
+	elseif (op == '!') then
+		error("ASDSAD")
 	end
 		  
 	-- is num op
@@ -170,7 +178,30 @@ local function eval_bool_expr(left, op_tk, right)
 	  src_line = left.src_line, src_column = left.src_column}
 end
 
+local function eval_una_expr(parse_tree)
+	local op_tk = parse_tree.op_tk
+	local op = op_tk.value
+	local right = eval_value(parse_tree.right)
+
+	if (op == '!') then
+		local value = is_falsy(right) and "true" or "false"
+		return {type = TK_TYPES.KEYWORD, value = value,
+		  src_line = op_tk.src_line, src_column = op_tk.src_column}
+		
+	elseif (op == '-') then
+		assert(right.type == TK_TYPES.NUM,
+		  fmt("Cannot negate %s '%s' at line %d, column %d, only numbers are allowed",
+		  right.type, right.value, right.src_line, right.src_column))
+		return {type = TK_TYPES.NUM, value = -right.value,
+		  src_line = op_tk.src_line, src_column = op_tk.src_column}
+	end
+end
+
 function eval_expr(parse_tree)
+	if (parse_tree.type == PARSE_TYPES.UNA_EXPR) then
+		return eval_una_expr(parse_tree)		
+	end
+	
 	local left = eval_value(parse_tree.left)
 	local right = eval_value(parse_tree.right)
 	local op_tk = parse_tree.op_tk
@@ -184,11 +215,11 @@ function eval_expr(parse_tree)
 	end
 	
 	assert(left.type == TK_TYPES.NUM,
-	  fmt("Cannot add %s '%s' with %s '%s' at line %d, column %d.",
+	  fmt("Cannot do arithmetic operation on %s '%s' with %s '%s' at line %d, column %d.",
 	  left.type, left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
 	  
 	assert(right.type == TK_TYPES.NUM,
-	  fmt("Cannot add number '%d' with %s '%s' at line %d, column %d.",
+	  fmt("Cannot do arithmetic operation on number '%d' with %s '%s' at line %d, column %d.",
 	  left.value, right.type, right.value, op_tk.src_line, op_tk.src_column))
 
 	local op = op_tk.value
@@ -296,7 +327,7 @@ end
 -- real deal
 local function run_while(parse_tree)
 	while (cond_run_block(parse_tree.cond, parse_tree.block)) do
-		
+			
 	end
 end
 
@@ -364,7 +395,7 @@ end
 
 local function run_ret(parse_tree)
 	fn_ret_val = eval_value(parse_tree.value)
-	print("RET VAL", pretty_table(fn_ret_val))
+	-- print("RET VAL", pretty_table(fn_ret_val))
 	is_fn_returning = true
 end
 
@@ -382,6 +413,10 @@ local function run_break()
 	is_loop_breaking = true
 end
 
+local function run_skip()
+	is_loop_skipping = false
+end
+
 local tasks = {
 	[PARSE_TYPES.WHILE] = run_while,
 	[PARSE_TYPES.DECLARE] = run_declare,
@@ -390,13 +425,13 @@ local tasks = {
 	[PARSE_TYPES.RET] = run_ret,
 	[PARSE_TYPES.IF] = run_if,
 	[PARSE_TYPES.REASSIGN] = run_reassign,
+	[PARSE_TYPES.SKIP] = run_skip,
 	[PARSE_TYPES.BREAK] = run_break,
 }
 
 local function run_statement(block)
 	inc_index()
 	local statement = block[get_index()]
-	print("STMT", statement.type)
 	local task = tasks[statement.type]
 	task(statement)
 end
@@ -418,7 +453,16 @@ function run_block(block)
 
 			break
 		end
-
+		if (is_loop_breaking) then
+			is_loop_breaking = false
+			local frame = call_stack[#call_stack]
+			frame.nested_block_count = frame.nested_block_count - 1
+			break
+		end
+		if (is_loop_skipping) then
+			is_loop_skipping = false
+			break
+		end
 		if (get_index() == end_index) then break end
 		run_statement(block)
 	end

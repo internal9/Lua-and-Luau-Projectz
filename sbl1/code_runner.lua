@@ -11,7 +11,7 @@ local env = {}
 local function G_log(...)
 	local evaluated = {}
 	for index, arg in ipairs({...}) do
-		evaluated[index] = eval_value(arg).value
+		evaluated[index] = search_val_from_envs("vars", arg.value).value
 	end
 	print(table.unpack(evaluated))
 end
@@ -271,7 +271,7 @@ local function struct_to_debug_str(elements)
 end
 
 function eval_value(val)
-	if (is_literal(val)) then return val end
+	if (is_literal(val)) then print("IS LIT", val) return val end
 	
 	if (is_expr(val)) then
 		return eval_expr(val)
@@ -279,6 +279,7 @@ function eval_value(val)
 		return eval_tern_expr(val.cond, val.true_val, val.false_val)
 	elseif (val.type == TK_TYPES.ID) then
 		local id_data = search_val_from_envs("vars", val.value)
+		print(pretty_table(get_current_env()), id_data)
 		assert(id_data,
 		  fmt("Failed to retrieve identifier '%s' at line %d, column %d, since it is undeclared.",
 		  val.value, val.src_line, val.src_column))
@@ -314,12 +315,13 @@ function search_val_from_envs(type, id)
 
 	for i = #call_stack, 1, -1 do
 		local frame = call_stack[i]
-		local val = frame.env[type][id]
+		val = frame.env[type][id]
+		print("FRAME")
 		if (val) then return val end		
 	end
 end
 
-local function get_current_env()
+function get_current_env()
 	if (#call_stack ~= 0) then return call_stack[#call_stack].env end
 	return env
 end
@@ -327,8 +329,26 @@ end
 -- real deal
 local function run_while(parse_tree)
 	while (cond_run_block(parse_tree.cond, parse_tree.block)) do
-			
+		if (is_loop_breaking) then
+			is_loop_breaking = false
+			break
+		end				
 	end
+end
+
+local function run_rep(parse_tree)
+	repeat
+		if (is_loop_breaking) then
+			is_loop_breaking = false
+			break
+		end
+
+		run_block(parse_tree.block)
+	until (not is_falsy(eval_value(parse_tree.cond)))
+end
+
+local function run_iter(parse_tree)
+
 end
 
 local function run_declare(parse_tree)
@@ -366,8 +386,13 @@ local function run_fn(parse_tree)
 	local existing_fn = search_val_from_envs("fns", id)
 
 	if (existing_fn) then
-		error(fmt("Failed to declare var '%s' at line %d, column %d since it's already declared at line %d, column %d.",
-		  id, parse_tree.src_line, parse_tree.src_column, existing_fn.src_line, existing_fn.src_column))
+		if (existing_fn.is_built_in) then
+			error(fmt("Failed to declare function '%s' at line %d, column %d since it's a built in global.",
+			  id, parse_tree.src_line, parse_tree.src_column, existing_fn.src_line, existing_fn.src_column))
+		else
+			error(fmt("Failed to declare function '%s' at line %d, column %d since it's already declared at line %d, column %d.",
+			  id, parse_tree.src_line, parse_tree.src_column, existing_fn.src_line, existing_fn.src_column))
+		end
 	end
 	
 	get_current_env().fns[id] = {src_line = parse_tree.src_line, src_column = parse_tree.src_column,
@@ -382,12 +407,26 @@ function run_fn_call(parse_tree)
 	 id, parse_tree.src_line, parse_tree.src_column))
 
 	if (fn.is_built_in) then
+		-- error(pretty_table(parse_tree))
 		fn.run(table.unpack(parse_tree.args))
 		return
 	end
+
+	local env = {vars = {}, fns = {}}
 	-- deep clone, to prevent the parse tree's arg table itself from being modified since tables are passed by reference
-	call_stack[#call_stack + 1] = {id = id, args = deep_clone_tb(parse_tree.args),
-	  env = {vars = {}, fns = {}}, src_line = fn.src_line, src_column = fn.src_column, nested_block_count = 0}
+	local args = deep_clone_tb(parse_tree.args)
+
+	for index, param in ipairs(fn.params) do
+		local arg = parse_tree.args[index]
+		-- print_pretty_tb(parse_tree.args)
+		local evalued_arg = (arg) and eval_value(arg) or {type = TK_TYPES.KEYWORD, value = "null"}
+		evalued_arg.src_line = param.src_line
+		evalued_arg.src_column = param.src_column
+		env.vars[param.value] = evalued_arg
+	end
+
+	call_stack[#call_stack + 1] = {id = id,
+	  env = env, src_line = fn.src_line, src_column = fn.src_column, nested_block_count = 0}
 
 	run_block(fn.block)
 	call_stack[#call_stack] = nil
@@ -414,7 +453,7 @@ local function run_break()
 end
 
 local function run_skip()
-	is_loop_skipping = false
+	is_loop_skipping = true
 end
 
 local tasks = {
@@ -427,6 +466,8 @@ local tasks = {
 	[PARSE_TYPES.REASSIGN] = run_reassign,
 	[PARSE_TYPES.SKIP] = run_skip,
 	[PARSE_TYPES.BREAK] = run_break,
+	[PARSE_TYPES.REP] = run_rep,
+	[PARSE_TYPES.ITER] = run_iter,
 }
 
 local function run_statement(block)
@@ -454,9 +495,8 @@ function run_block(block)
 			break
 		end
 		if (is_loop_breaking) then
-			is_loop_breaking = false
 			local frame = call_stack[#call_stack]
-			frame.nested_block_count = frame.nested_block_count - 1
+			if (frame) then frame.nested_block_count = frame.nested_block_count - 1 end
 			break
 		end
 		if (is_loop_skipping) then

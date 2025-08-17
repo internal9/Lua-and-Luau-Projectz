@@ -230,7 +230,7 @@ function parse_fn(src_line, src_column)
 		  fmt("Duplicate parameter '%s' at line %d, column %d for function '%s'.",
 		   param.value, param.src_line, param.src_column, id_tk.value))
 		  
-		tb_insert(params, param.value)
+		tb_insert(params, param)
 		params_checks[param.value] = true
 		expect_param = false
 		
@@ -287,7 +287,7 @@ function parse_fn_call(id_tk, src_line, src_column)
 			break
 		end
 		
-		local arg = parse_expr()
+		local arg = parse_value()
 		expect_arg = false
 		
 		tb_insert(args, arg)

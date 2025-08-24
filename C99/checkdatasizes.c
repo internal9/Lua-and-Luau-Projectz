@@ -15,6 +15,17 @@ int main(void) {
 	printf(" Unsigned:\n");
 	printf("  Min Size: 0\n");
 	printf("  Max Size: %u\n", UCHAR_MAX);
+
+	printf("\nSHORT:\n");
+	printf(" Bits: %lu\n", sizeof(short) * BYTE_TO_BITS);
+
+	printf(" Signed:\n");
+	printf("  Min Size: %hd\n", SHRT_MIN);
+	printf("  Max Size: %hd\n", SHRT_MAX);
+
+	printf(" Unsigned:\n");
+	printf("  Min Size: 0\n");
+	printf("  Max Size: %hu\n", USHRT_MAX);
 	
 	printf("\nINT:\n");
 	printf(" Bits: %lu\n", sizeof(int) * BYTE_TO_BITS);

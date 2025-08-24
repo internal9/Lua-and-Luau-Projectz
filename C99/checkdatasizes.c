@@ -2,6 +2,24 @@
 #include <stdio.h>
 #define BYTE_TO_BITS 8
 
+/*
+	standard signed integer types:
+		short int,
+		int,
+		long int,
+		long long int
+		signed char // default signdness varies
+		
+	standard signed integer types:
+		unsigned short int,
+		unsigned int,
+		unsigned long int,
+		unsigned long long int,
+		unsigned char
+
+	certain c compilers are allowed to have implementation-defined
+	int types (AKA extended integer types), such as 128 bit ones.
+*/
 int main(void) {
 	printf("DATATYPE SIZES & LIMITS:\n");
 	

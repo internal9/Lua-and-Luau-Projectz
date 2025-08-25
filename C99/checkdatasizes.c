@@ -3,6 +3,7 @@
 #define BYTE_TO_BITS 8
 
 /*
+	long longs are required to be atleast 64 bits in size
 	standard signed integer types:
 		short int,
 		int,

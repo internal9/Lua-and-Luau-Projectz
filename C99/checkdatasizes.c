@@ -16,6 +16,7 @@
 		unsigned long int,
 		unsigned long long int,
 		unsigned char
+  		_Bool
 
 	certain c compilers are allowed to have implementation-defined
 	int types (AKA extended integer types), such as 128 bit ones.
